@@ -13,6 +13,8 @@
     "@tailwindcss/vite": "^4.3.3",
     "d3": "^7.9.0",
     "geojson-world-map": "^0.0.2",
+    "polyclip-ts": "^0.16.8",
+    "polygon-clipping": "^0.15.7",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "tailwindcss": "^4.3.3"
