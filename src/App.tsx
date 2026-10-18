@@ -11,7 +11,9 @@ import {
   type GeoPermissibleObjects,
   type GeoProjection,
 } from "d3";
-import world from "./custom.geo.json";
+import type { Feature, Geometry } from "geojson";
+import countriesData from "./custom.geo.json";
+import world from "./ne_50m_coastline.geo.json";
 import { createGrid } from "./lib/GridLayer";
 
 const width = 1000;
@@ -20,7 +22,7 @@ const height = 700;
 const padding = 50;
 
 // Grid cell size in degrees of longitude/latitude
-const GRID_STEP = 20;
+const GRID_STEP = 30;
 
 const projections = {
   geoEqualEarth,
@@ -67,9 +69,11 @@ function firstVisible(
 }
 
 const lons = range(Math.ceil(-180 / GRID_STEP) * GRID_STEP, 181, GRID_STEP);
-const lats = range(Math.ceil(-90 / GRID_STEP) * GRID_STEP, 91, GRID_STEP).filter(
-  (lat) => Math.abs(lat) < 90,
-);
+const lats = range(
+  Math.ceil(-90 / GRID_STEP) * GRID_STEP,
+  91,
+  GRID_STEP,
+).filter((lat) => Math.abs(lat) < 90);
 const southToNorth = range(-90, 91, 1);
 const westToEast = range(-180, 181, 1);
 
@@ -94,11 +98,19 @@ function computeLabels(projection: GeoProjection) {
   return { meridians, parallels };
 }
 
+type Country = Feature<Geometry, { name: string }>;
+
+const countries = countriesData.features as unknown as Country[];
+
+const pickRandomCountry = (): Country =>
+  countries[Math.floor(Math.random() * countries.length)];
+
 function App() {
   const [projectionName, setProjectionName] =
     useState<ProjectionName>("geoEqualEarth");
+  const [country, setCountry] = useState(pickRandomCountry);
 
-  const { worldPath, gridPath, labels } = useMemo(() => {
+  const { worldPath, countryPath, gridPath, labels } = useMemo(() => {
     const projection = projections[projectionName]().fitExtent(
       [
         [padding, padding],
@@ -109,10 +121,11 @@ function App() {
     const pathGenerator = geoPath(projection);
     return {
       worldPath: pathGenerator(world as GeoPermissibleObjects)!,
+      countryPath: pathGenerator(country)!,
       gridPath: pathGenerator(createGrid(GRID_STEP)())!,
       labels: computeLabels(projection),
     };
-  }, [projectionName]);
+  }, [projectionName, country]);
 
   return (
     <div className="flex h-screen flex-col items-center gap-2 p-4">
@@ -126,8 +139,24 @@ function App() {
           </option>
         ))}
       </select>
+      <div className="flex items-center gap-3">
+        <span className="text-xl font-semibold">{country.properties.name}</span>
+        <button
+          type="button"
+          className="rounded border px-2 py-0.5"
+          onClick={() => setCountry(pickRandomCountry())}
+        >
+          New country
+        </button>
+      </div>
       <svg className="min-h-0 w-full flex-1" viewBox={`0 0 ${width} ${height}`}>
-        <path d={worldPath} />
+        <path
+          d={worldPath}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={0.6}
+        />
+        <path d={countryPath} fill="orange" stroke="currentColor" />
         <path d={gridPath} fill="none" stroke="green" strokeWidth={1} />
         <g fontSize={10} fill="currentColor">
           {labels.meridians.map(({ lon, x, y }) => (
