@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type PointerEvent } from "react";
 import {
   geoAzimuthalEqualArea,
   geoDistance,
@@ -14,7 +14,12 @@ import {
 import type { Feature, Geometry } from "geojson";
 import countriesData from "./custom.geo.json";
 import world from "./ne_50m_coastline.geo.json";
-import { createGrid } from "./lib/GridLayer";
+import {
+  cellAt,
+  cellOutline,
+  createGrid,
+  type GridCell,
+} from "./lib/GridLayer";
 
 const width = 1000;
 const height = 700;
@@ -110,22 +115,51 @@ function App() {
     useState<ProjectionName>("geoEqualEarth");
   const [country, setCountry] = useState(pickRandomCountry);
 
-  const { worldPath, countryPath, gridPath, labels } = useMemo(() => {
-    const projection = projections[projectionName]().fitExtent(
-      [
-        [padding, padding],
-        [width - padding, height - padding],
-      ],
-      { type: "Sphere" },
+  const [hoveredCell, setHoveredCell] = useState<GridCell | null>(null);
+
+  const { projection, pathGenerator, worldPath, countryPath, gridPath, labels } =
+    useMemo(() => {
+      const projection = projections[projectionName]().fitExtent(
+        [
+          [padding, padding],
+          [width - padding, height - padding],
+        ],
+        { type: "Sphere" },
+      );
+      const pathGenerator = geoPath(projection);
+      return {
+        projection,
+        pathGenerator,
+        worldPath: pathGenerator(world as GeoPermissibleObjects)!,
+        countryPath: pathGenerator(country)!,
+        gridPath: pathGenerator(createGrid(GRID_STEP)())!,
+        labels: computeLabels(projection),
+      };
+    }, [projectionName, country]);
+
+  const handlePointerMove = (e: PointerEvent<SVGSVGElement>) => {
+    const svg = e.currentTarget;
+    const inverse = svg.getScreenCTM()?.inverse();
+    if (!inverse) return;
+    // Pointer position in SVG (viewBox) coordinates
+    const { x, y } = new DOMPoint(e.clientX, e.clientY).matrixTransform(inverse);
+    const lonLat = projection.invert?.([x, y]);
+    // Only cells over the map count: points outside the globe invert to
+    // something that does not project back to where the pointer is.
+    const back = lonLat && projection(lonLat);
+    if (!lonLat || !back || Math.hypot(back[0] - x, back[1] - y) > 0.5) {
+      setHoveredCell(null);
+      return;
+    }
+    const cell = cellAt(lonLat, GRID_STEP);
+    setHoveredCell((prev) =>
+      prev &&
+      prev.lon0 === cell.lon0 &&
+      prev.lat0 === cell.lat0
+        ? prev
+        : cell,
     );
-    const pathGenerator = geoPath(projection);
-    return {
-      worldPath: pathGenerator(world as GeoPermissibleObjects)!,
-      countryPath: pathGenerator(country)!,
-      gridPath: pathGenerator(createGrid(GRID_STEP)())!,
-      labels: computeLabels(projection),
-    };
-  }, [projectionName, country]);
+  };
 
   return (
     <div className="flex h-screen flex-col items-center gap-2 p-4">
@@ -149,7 +183,12 @@ function App() {
           New country
         </button>
       </div>
-      <svg className="min-h-0 w-full flex-1" viewBox={`0 0 ${width} ${height}`}>
+      <svg
+        className="min-h-0 w-full flex-1"
+        viewBox={`0 0 ${width} ${height}`}
+        onPointerMove={handlePointerMove}
+        onPointerLeave={() => setHoveredCell(null)}
+      >
         <path
           d={worldPath}
           fill="none"
@@ -157,6 +196,14 @@ function App() {
           strokeWidth={0.6}
         />
         <path d={countryPath} fill="orange" stroke="currentColor" />
+        {hoveredCell && (
+          <path
+            d={pathGenerator(cellOutline(hoveredCell))!}
+            fill="green"
+            fillOpacity={0.3}
+            pointerEvents="none"
+          />
+        )}
         <path d={gridPath} fill="none" stroke="green" strokeWidth={1} />
         <g fontSize={10} fill="currentColor">
           {labels.meridians.map(({ lon, x, y }) => (
