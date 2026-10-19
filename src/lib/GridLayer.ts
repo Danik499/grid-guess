@@ -1,13 +1,19 @@
 import { geoGraticule } from "d3";
+import type { Extent } from "./regions";
 
-/** Grid covering the whole globe, with square cells of `step` degrees. */
-export function createGrid(step: number) {
-  return geoGraticule()
-    .extent([
-      [-180, -90],
-      [180, 90],
-    ])
-    .step([step, step]);
+const WORLD: Extent = [
+  [-180, -90],
+  [180, 90],
+];
+
+/** Grid covering `extent` (the whole globe by default), with cells of `step` degrees. */
+export function createGrid(step: number, extent: Extent = WORLD) {
+  return geoGraticule().extent(extent).step([step, step]);
+}
+
+/** Outer border of the grid. d3 omits the lines at the max lon/lat edges. */
+export function createGridOutline(step: number, extent: Extent = WORLD) {
+  return createGrid(step, extent).outline();
 }
 
 export interface GridCell {

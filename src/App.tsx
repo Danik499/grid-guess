@@ -17,6 +17,7 @@ import {
   cellAt,
   cellOutline,
   createGrid,
+  createGridOutline,
   type GridCell,
 } from "./lib/GridLayer";
 import {
@@ -24,14 +25,12 @@ import {
   computeCountryCells,
   type RankedCellShare,
 } from "./lib/countryArea";
+import { regions, type Extent, type RegionName } from "./lib/regions";
 
 const width = 1000;
 const height = 700;
 // Leaves room around the map for the axis labels
 const padding = 50;
-
-// Grid cell size in degrees of longitude/latitude
-const GRID_STEP = 30;
 
 const projections = {
   geoEqualEarth,
@@ -76,19 +75,20 @@ function firstVisible(
   return null;
 }
 
-const lons = range(Math.ceil(-180 / GRID_STEP) * GRID_STEP, 181, GRID_STEP);
-const lats = range(
-  Math.ceil(-90 / GRID_STEP) * GRID_STEP,
-  91,
-  GRID_STEP,
-).filter((lat) => Math.abs(lat) < 90);
-const southToNorth = range(-90, 91, 1);
-const westToEast = range(-180, 181, 1);
-
 // Meridians are labelled where they meet the southern edge of the map,
 // parallels where they meet the western edge. Each label shows the degrees
 // and the projected (SVG) coordinate of the label position.
-function computeLabels(projection: GeoProjection) {
+function computeLabels(
+  projection: GeoProjection,
+  [[lon0, lat0], [lon1, lat1]]: Extent,
+  step: number,
+) {
+  const lons = range(Math.ceil(lon0 / step) * step, lon1 + 1, step);
+  const lats = range(Math.ceil(lat0 / step) * step, lat1 + 1, step).filter(
+    (lat) => Math.abs(lat) < 90,
+  );
+  const southToNorth = range(lat0, lat1 + 1, 1);
+  const westToEast = range(lon0, lon1 + 1, 1);
   const meridians = lons.flatMap((lon) => {
     const xy = firstVisible(
       projection,
@@ -106,12 +106,16 @@ function computeLabels(projection: GeoProjection) {
   return { meridians, parallels };
 }
 
-type Country = Feature<Geometry, { name: string }>;
+type Country = Feature<Geometry, { name: string; continent: string }>;
 
 const countries = countriesData.features as unknown as Country[];
 
-const pickRandomCountry = (): Country =>
-  countries[Math.floor(Math.random() * countries.length)];
+const pickRandomCountry = (continents: string[] | null): Country => {
+  const pool = continents
+    ? countries.filter((c) => continents.includes(c.properties.continent))
+    : countries;
+  return pool[Math.floor(Math.random() * pool.length)];
+};
 
 const formatKm2 = (km2: number) =>
   `${Math.round(km2).toLocaleString("en-US")} km²`;
@@ -163,14 +167,18 @@ function CellInfo({
 function App() {
   const [projectionName, setProjectionName] =
     useState<ProjectionName>("geoEqualEarth");
-  const [country, setCountry] = useState(pickRandomCountry);
+  const [regionName, setRegionName] = useState<RegionName>("World");
+  const { continents, extent, step } = regions[regionName];
+  const [country, setCountry] = useState(() =>
+    pickRandomCountry(regions.World.continents),
+  );
 
   const [hoveredCell, setHoveredCell] = useState<GridCell | null>(null);
   const [selectedCell, setSelectedCell] = useState<GridCell | null>(null);
 
   const countryCells = useMemo(
-    () => computeCountryCells(country.geometry, GRID_STEP),
-    [country],
+    () => computeCountryCells(country.geometry, step),
+    [country, step],
   );
   const selectedShare = selectedCell
     ? countryCells.byKey.get(cellKey(selectedCell))
@@ -182,25 +190,41 @@ function App() {
     worldPath,
     countryPath,
     gridPath,
+    gridOutlinePath,
     labels,
   } = useMemo(() => {
-    const projection = projections[projectionName]().fitExtent(
-      [
-        [padding, padding],
-        [width - padding, height - padding],
-      ],
-      { type: "Sphere" },
+    const box: Extent = [
+      [padding, padding],
+      [width - padding, height - padding],
+    ];
+    // Rotate the globe so the centre of the region is the centre of the map
+    const [[lon0, lat0], [lon1, lat1]] = extent;
+    const projection = projections[projectionName]()
+      .rotate([-(lon0 + lon1) / 2, -(lat0 + lat1) / 2])
+      .fitExtent(
+      box,
+      regionName === "World"
+        ? { type: "Sphere" }
+        : createGridOutline(step, extent),
     );
+    // Keep coastlines and countries inside the region's frame
+    if (regionName !== "World") {
+      projection.clipExtent([
+        [padding - 1, padding - 1],
+        [width - padding + 1, height - padding + 1],
+      ]);
+    }
     const pathGenerator = geoPath(projection);
     return {
       projection,
       pathGenerator,
       worldPath: pathGenerator(world as GeoPermissibleObjects)!,
       countryPath: pathGenerator(country)!,
-      gridPath: pathGenerator(createGrid(GRID_STEP)())!,
-      labels: computeLabels(projection),
+      gridPath: pathGenerator(createGrid(step, extent)())!,
+      gridOutlinePath: pathGenerator(createGridOutline(step, extent))!,
+      labels: computeLabels(projection, extent, step),
     };
-  }, [projectionName, country]);
+  }, [projectionName, country, regionName, extent, step]);
 
   const handlePointerMove = (e: PointerEvent<SVGSVGElement>) => {
     const svg = e.currentTarget;
@@ -218,7 +242,17 @@ function App() {
       setHoveredCell(null);
       return;
     }
-    const cell = cellAt(lonLat, GRID_STEP);
+    const [[lon0, lat0], [lon1, lat1]] = extent;
+    if (
+      lonLat[0] < lon0 ||
+      lonLat[0] >= lon1 ||
+      lonLat[1] < lat0 ||
+      lonLat[1] >= lat1
+    ) {
+      setHoveredCell(null);
+      return;
+    }
+    const cell = cellAt(lonLat, step);
     setHoveredCell((prev) =>
       prev && prev.lon0 === cell.lon0 && prev.lat0 === cell.lat0 ? prev : cell,
     );
@@ -226,23 +260,41 @@ function App() {
 
   return (
     <div className="flex h-screen flex-col items-center gap-2 p-4">
-      <select
-        value={projectionName}
-        onChange={(e) => setProjectionName(e.target.value as ProjectionName)}
-      >
-        {Object.keys(projections).map((name) => (
-          <option key={name} value={name}>
-            {name}
-          </option>
-        ))}
-      </select>
+      <div className="flex gap-2">
+        <select
+          value={projectionName}
+          onChange={(e) => setProjectionName(e.target.value as ProjectionName)}
+        >
+          {Object.keys(projections).map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
+        <select
+          value={regionName}
+          onChange={(e) => {
+            const next = e.target.value as RegionName;
+            setRegionName(next);
+            setCountry(pickRandomCountry(regions[next].continents));
+            setSelectedCell(null);
+            setHoveredCell(null);
+          }}
+        >
+          {Object.keys(regions).map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
+      </div>
       <div className="flex items-center gap-3">
         <span className="text-xl font-semibold">{country.properties.name}</span>
         <button
           type="button"
           className="rounded border px-2 py-0.5"
           onClick={() => {
-            setCountry(pickRandomCountry());
+            setCountry(pickRandomCountry(continents));
             setSelectedCell(null);
           }}
         >
@@ -289,6 +341,7 @@ function App() {
           />
         )}
         <path d={gridPath} fill="none" stroke="green" strokeWidth={1} />
+        <path d={gridOutlinePath} fill="none" stroke="green" strokeWidth={1} />
         <g fontSize={10} fill="currentColor">
           {labels.meridians.map(({ lon, x, y }) => (
             <text key={`lon${lon}`} x={x} y={y + 14} textAnchor="middle">
