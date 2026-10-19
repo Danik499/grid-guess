@@ -1,11 +1,10 @@
 import { useMemo, useState, type PointerEvent } from "react";
 import {
-  geoAzimuthalEqualArea,
   geoDistance,
   geoEqualEarth,
+  geoEquirectangular,
   geoMercator,
   geoNaturalEarth1,
-  geoOrthographic,
   geoPath,
   range,
   type GeoPermissibleObjects,
@@ -20,6 +19,11 @@ import {
   createGrid,
   type GridCell,
 } from "./lib/GridLayer";
+import {
+  cellKey,
+  computeCountryCells,
+  type RankedCellShare,
+} from "./lib/countryArea";
 
 const width = 1000;
 const height = 700;
@@ -33,8 +37,7 @@ const projections = {
   geoEqualEarth,
   geoNaturalEarth1,
   geoMercator,
-  geoOrthographic,
-  geoAzimuthalEqualArea,
+  geoEquirectangular,
 };
 type ProjectionName = keyof typeof projections;
 
@@ -110,39 +113,103 @@ const countries = countriesData.features as unknown as Country[];
 const pickRandomCountry = (): Country =>
   countries[Math.floor(Math.random() * countries.length)];
 
+const formatKm2 = (km2: number) =>
+  `${Math.round(km2).toLocaleString("en-US")} km²`;
+const formatPercent = (fraction: number) => `${(fraction * 100).toFixed(1)}%`;
+
+function CellInfo({
+  countryName,
+  cell,
+  share,
+  cellCount,
+  best,
+  totalKm2,
+}: {
+  countryName: string;
+  cell: GridCell | null;
+  share: RankedCellShare | undefined;
+  cellCount: number;
+  best: { share: number };
+  totalKm2: number;
+}) {
+  if (!cell) {
+    return (
+      <div className="h-12 text-sm opacity-60">
+        Click a cell to see how much of {countryName} lies in it (
+        {formatKm2(totalKm2)} in total).
+      </div>
+    );
+  }
+  const where = `${formatLon(cell.lon0)}–${formatLon(cell.lon1)}, ${formatLat(cell.lat0)}–${formatLat(cell.lat1)}`;
+  return (
+    <div className="h-12 text-sm">
+      <div className="font-semibold">
+        {where}:{" "}
+        {share
+          ? `${formatPercent(share.share)} of ${countryName} (${formatKm2(share.areaKm2)})`
+          : `no part of ${countryName}`}
+      </div>
+      {share && (
+        <div className="opacity-80">
+          Covers {formatPercent(share.coverage)} of the cell · rank {share.rank}{" "}
+          of {cellCount} · {formatPercent(share.share / best.share)} of the best
+          cell
+        </div>
+      )}
+    </div>
+  );
+}
+
 function App() {
   const [projectionName, setProjectionName] =
     useState<ProjectionName>("geoEqualEarth");
   const [country, setCountry] = useState(pickRandomCountry);
 
   const [hoveredCell, setHoveredCell] = useState<GridCell | null>(null);
+  const [selectedCell, setSelectedCell] = useState<GridCell | null>(null);
 
-  const { projection, pathGenerator, worldPath, countryPath, gridPath, labels } =
-    useMemo(() => {
-      const projection = projections[projectionName]().fitExtent(
-        [
-          [padding, padding],
-          [width - padding, height - padding],
-        ],
-        { type: "Sphere" },
-      );
-      const pathGenerator = geoPath(projection);
-      return {
-        projection,
-        pathGenerator,
-        worldPath: pathGenerator(world as GeoPermissibleObjects)!,
-        countryPath: pathGenerator(country)!,
-        gridPath: pathGenerator(createGrid(GRID_STEP)())!,
-        labels: computeLabels(projection),
-      };
-    }, [projectionName, country]);
+  const countryCells = useMemo(
+    () => computeCountryCells(country.geometry, GRID_STEP),
+    [country],
+  );
+  const selectedShare = selectedCell
+    ? countryCells.byKey.get(cellKey(selectedCell))
+    : undefined;
+
+  const {
+    projection,
+    pathGenerator,
+    worldPath,
+    countryPath,
+    gridPath,
+    labels,
+  } = useMemo(() => {
+    const projection = projections[projectionName]().fitExtent(
+      [
+        [padding, padding],
+        [width - padding, height - padding],
+      ],
+      { type: "Sphere" },
+    );
+    const pathGenerator = geoPath(projection);
+    return {
+      projection,
+      pathGenerator,
+      worldPath: pathGenerator(world as GeoPermissibleObjects)!,
+      countryPath: pathGenerator(country)!,
+      gridPath: pathGenerator(createGrid(GRID_STEP)())!,
+      labels: computeLabels(projection),
+    };
+  }, [projectionName, country]);
 
   const handlePointerMove = (e: PointerEvent<SVGSVGElement>) => {
     const svg = e.currentTarget;
     const inverse = svg.getScreenCTM()?.inverse();
     if (!inverse) return;
     // Pointer position in SVG (viewBox) coordinates
-    const { x, y } = new DOMPoint(e.clientX, e.clientY).matrixTransform(inverse);
+    const { x, y } = new DOMPoint(e.clientX, e.clientY).matrixTransform(
+      inverse,
+    );
     const lonLat = projection.invert?.([x, y]);
     // Only cells over the map count: points outside the globe invert to
     // something that does not project back to where the pointer is.
@@ -153,11 +220,7 @@ function App() {
     }
     const cell = cellAt(lonLat, GRID_STEP);
     setHoveredCell((prev) =>
-      prev &&
-      prev.lon0 === cell.lon0 &&
-      prev.lat0 === cell.lat0
-        ? prev
-        : cell,
+      prev && prev.lon0 === cell.lon0 && prev.lat0 === cell.lat0 ? prev : cell,
     );
   };
 
@@ -178,16 +241,28 @@ function App() {
         <button
           type="button"
           className="rounded border px-2 py-0.5"
-          onClick={() => setCountry(pickRandomCountry())}
+          onClick={() => {
+            setCountry(pickRandomCountry());
+            setSelectedCell(null);
+          }}
         >
           New country
         </button>
       </div>
+      <CellInfo
+        countryName={country.properties.name}
+        cell={selectedCell}
+        share={selectedShare}
+        cellCount={countryCells.cells.length}
+        best={countryCells.cells[0]}
+        totalKm2={countryCells.totalKm2}
+      />
       <svg
         className="min-h-0 w-full flex-1"
         viewBox={`0 0 ${width} ${height}`}
         onPointerMove={handlePointerMove}
         onPointerLeave={() => setHoveredCell(null)}
+        onClick={() => setSelectedCell(hoveredCell)}
       >
         <path
           d={worldPath}
@@ -201,6 +276,15 @@ function App() {
             d={pathGenerator(cellOutline(hoveredCell))!}
             fill="green"
             fillOpacity={0.3}
+            pointerEvents="none"
+          />
+        )}
+        {selectedCell && (
+          <path
+            d={pathGenerator(cellOutline(selectedCell))!}
+            fill="none"
+            stroke="red"
+            strokeWidth={3}
             pointerEvents="none"
           />
         )}
