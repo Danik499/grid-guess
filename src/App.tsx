@@ -1,4 +1,4 @@
-import { useMemo, useState, type PointerEvent } from "react";
+import { useEffect, useMemo, useState, type PointerEvent } from "react";
 import {
   geoDistance,
   geoEqualEarth,
@@ -6,13 +6,11 @@ import {
   geoMercator,
   geoNaturalEarth1,
   geoPath,
+  json,
   range,
-  type GeoPermissibleObjects,
   type GeoProjection,
 } from "d3";
-import type { Feature, Geometry } from "geojson";
-import countriesData from "./custom.geo.json";
-import world from "./ne_50m_coastline.geo.json";
+import type { Feature, FeatureCollection, Geometry } from "geojson";
 import {
   cellAt,
   cellOutline,
@@ -108,9 +106,10 @@ function computeLabels(
 
 type Country = Feature<Geometry, { name: string; continent: string }>;
 
-const countries = countriesData.features as unknown as Country[];
-
-const pickRandomCountry = (continents: string[] | null): Country => {
+const pickRandomCountry = (
+  countries: Country[],
+  continents: string[] | null,
+): Country => {
   const pool = continents
     ? countries.filter((c) => continents.includes(c.properties.continent))
     : countries;
@@ -164,13 +163,50 @@ function CellInfo({
   );
 }
 
+interface MapData {
+  countries: Country[];
+  world: FeatureCollection;
+}
+
+// Served from public/ so the large GeoJSON files stay out of the JS bundle
+async function loadMapData(): Promise<MapData> {
+  const base = import.meta.env.BASE_URL;
+  const [countries, world] = await Promise.all([
+    json<FeatureCollection<Geometry, Country["properties"]>>(
+      `${base}custom.geo.json`,
+    ),
+    json<FeatureCollection>(`${base}ne_50m_coastline.geo.json`),
+  ]);
+  if (!countries || !world) throw new Error("Map data is empty");
+  return { countries: countries.features, world };
+}
+
 function App() {
+  const [data, setData] = useState<MapData | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    loadMapData()
+      .then(setData)
+      .catch((e: unknown) => setError(String(e)));
+  }, []);
+
+  if (error) {
+    return <div className="p-4">Could not load map data: {error}</div>;
+  }
+  if (!data) {
+    return <div className="p-4 opacity-60">Loading map…</div>;
+  }
+  return <Game {...data} />;
+}
+
+function Game({ countries, world }: MapData) {
   const [projectionName, setProjectionName] =
     useState<ProjectionName>("geoEqualEarth");
   const [regionName, setRegionName] = useState<RegionName>("World");
   const { continents, extent, step } = regions[regionName];
   const [country, setCountry] = useState(() =>
-    pickRandomCountry(regions.World.continents),
+    pickRandomCountry(countries, regions.World.continents),
   );
 
   const [hoveredCell, setHoveredCell] = useState<GridCell | null>(null);
@@ -202,11 +238,11 @@ function App() {
     const projection = projections[projectionName]()
       .rotate([-(lon0 + lon1) / 2, -(lat0 + lat1) / 2])
       .fitExtent(
-      box,
-      regionName === "World"
-        ? { type: "Sphere" }
-        : createGridOutline(step, extent),
-    );
+        box,
+        regionName === "World"
+          ? { type: "Sphere" }
+          : createGridOutline(step, extent),
+      );
     // Keep coastlines and countries inside the region's frame
     if (regionName !== "World") {
       projection.clipExtent([
@@ -218,13 +254,13 @@ function App() {
     return {
       projection,
       pathGenerator,
-      worldPath: pathGenerator(world as GeoPermissibleObjects)!,
+      worldPath: pathGenerator(world)!,
       countryPath: pathGenerator(country)!,
       gridPath: pathGenerator(createGrid(step, extent)())!,
       gridOutlinePath: pathGenerator(createGridOutline(step, extent))!,
       labels: computeLabels(projection, extent, step),
     };
-  }, [projectionName, country, regionName, extent, step]);
+  }, [projectionName, country, regionName, extent, step, world]);
 
   const handlePointerMove = (e: PointerEvent<SVGSVGElement>) => {
     const svg = e.currentTarget;
@@ -276,7 +312,7 @@ function App() {
           onChange={(e) => {
             const next = e.target.value as RegionName;
             setRegionName(next);
-            setCountry(pickRandomCountry(regions[next].continents));
+            setCountry(pickRandomCountry(countries, regions[next].continents));
             setSelectedCell(null);
             setHoveredCell(null);
           }}
@@ -294,7 +330,7 @@ function App() {
           type="button"
           className="rounded border px-2 py-0.5"
           onClick={() => {
-            setCountry(pickRandomCountry(continents));
+            setCountry(pickRandomCountry(countries, continents));
             setSelectedCell(null);
           }}
         >
