@@ -11,6 +11,8 @@ import {
   type GeoProjection,
 } from "d3";
 import type { Feature, FeatureCollection, Geometry } from "geojson";
+import { feature } from "topojson-client";
+import type { GeometryCollection, Topology } from "topojson-specification";
 import {
   cellAt,
   cellOutline,
@@ -168,17 +170,24 @@ interface MapData {
   world: FeatureCollection;
 }
 
-// Served from public/ so the large GeoJSON files stay out of the JS bundle
+type CountriesTopology = Topology<{
+  countries: GeometryCollection<Country["properties"]>;
+}>;
+type CoastlineTopology = Topology<{ coastline: GeometryCollection }>;
+
+// TopoJSON built from data/ by `npm run data`, served from public/ so it
+// stays out of the JS bundle
 async function loadMapData(): Promise<MapData> {
   const base = import.meta.env.BASE_URL;
-  const [countries, world] = await Promise.all([
-    json<FeatureCollection<Geometry, Country["properties"]>>(
-      `${base}custom.geo.json`,
-    ),
-    json<FeatureCollection>(`${base}ne_50m_coastline.geo.json`),
+  const [countries, coastline] = await Promise.all([
+    json<CountriesTopology>(`${base}countries.topo.json`),
+    json<CoastlineTopology>(`${base}coastline.topo.json`),
   ]);
-  if (!countries || !world) throw new Error("Map data is empty");
-  return { countries: countries.features, world };
+  if (!countries || !coastline) throw new Error("Map data is empty");
+  return {
+    countries: feature(countries, countries.objects.countries).features,
+    world: feature(coastline, coastline.objects.coastline),
+  };
 }
 
 function App() {
