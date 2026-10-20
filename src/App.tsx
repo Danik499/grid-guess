@@ -2,9 +2,12 @@ import { useEffect, useMemo, useState, type PointerEvent } from "react";
 import {
   geoDistance,
   geoEqualEarth,
+  geoEqualEarthRaw,
   geoEquirectangular,
+  geoEquirectangularRaw,
   geoMercator,
   geoNaturalEarth1,
+  geoNaturalEarth1Raw,
   geoPath,
   json,
   range,
@@ -25,20 +28,41 @@ import {
   computeCountryCells,
   type RankedCellShare,
 } from "./lib/countryArea";
+import {
+  clampedMercatorRaw,
+  useViewTransition,
+  viewOf,
+} from "./lib/projectionTransition";
 import { regions, type Extent, type RegionName } from "./lib/regions";
 
 const width = 1000;
 const height = 700;
 // Leaves room around the map for the axis labels
 const padding = 50;
+// Region views are clipped to this frame, and so is every transition frame
+const frameClip: Extent = [
+  [padding - 1, padding - 1],
+  [width - padding + 1, height - padding + 1],
+];
 
+// `raw` is what transitions blend between
 const projections = {
-  geoEqualEarth,
-  geoNaturalEarth1,
-  geoMercator,
-  geoEquirectangular,
+  geoEqualEarth: { create: geoEqualEarth, raw: geoEqualEarthRaw },
+  geoNaturalEarth1: { create: geoNaturalEarth1, raw: geoNaturalEarth1Raw },
+  geoMercator: { create: geoMercator, raw: clampedMercatorRaw },
+  geoEquirectangular: {
+    create: geoEquirectangular,
+    raw: geoEquirectangularRaw,
+  },
 };
 type ProjectionName = keyof typeof projections;
+
+const projectionLabels: Record<ProjectionName, string> = {
+  geoEqualEarth: "Equal Earth",
+  geoNaturalEarth1: "Natural Earth",
+  geoMercator: "Mercator",
+  geoEquirectangular: "Equirectangular",
+};
 
 const formatLon = (lon: number) =>
   `${Math.abs(lon)}°${lon < 0 ? "W" : lon > 0 ? "E" : ""}`;
@@ -229,22 +253,15 @@ function Game({ countries, world }: MapData) {
     ? countryCells.byKey.get(cellKey(selectedCell))
     : undefined;
 
-  const {
-    projection,
-    pathGenerator,
-    worldPath,
-    countryPath,
-    gridPath,
-    gridOutlinePath,
-    labels,
-  } = useMemo(() => {
+  const target = useMemo(() => {
     const box: Extent = [
       [padding, padding],
       [width - padding, height - padding],
     ];
     // Rotate the globe so the centre of the region is the centre of the map
     const [[lon0, lat0], [lon1, lat1]] = extent;
-    const projection = projections[projectionName]()
+    const { create, raw } = projections[projectionName];
+    const projection = create()
       .rotate([-(lon0 + lon1) / 2, -(lat0 + lat1) / 2])
       .fitExtent(
         box,
@@ -254,24 +271,35 @@ function Game({ countries, world }: MapData) {
       );
     // Keep coastlines and countries inside the region's frame
     if (regionName !== "World") {
-      projection.clipExtent([
-        [padding - 1, padding - 1],
-        [width - padding + 1, height - padding + 1],
-      ]);
+      projection.clipExtent(frameClip);
     }
-    const pathGenerator = geoPath(projection);
-    return {
-      projection,
-      pathGenerator,
-      worldPath: pathGenerator(world)!,
-      countryPath: pathGenerator(country)!,
-      gridPath: pathGenerator(createGrid(step, extent)())!,
-      gridOutlinePath: pathGenerator(createGridOutline(step, extent))!,
-      labels: computeLabels(projection, extent, step),
-    };
-  }, [projectionName, country, regionName, extent, step, world]);
+    return { projection, view: viewOf(raw, projection) };
+  }, [projectionName, regionName, extent, step]);
+  // Hit-testing and labels use the target, which has `invert`
+  const { projection } = target;
+
+  const { projection: shown, animating } = useViewTransition(target, frameClip);
+
+  const { pathGenerator, worldPath, countryPath, gridPath, gridOutlinePath } =
+    useMemo(() => {
+      const pathGenerator = geoPath(shown);
+      return {
+        pathGenerator,
+        worldPath: pathGenerator(world)!,
+        countryPath: pathGenerator(country)!,
+        gridPath: pathGenerator(createGrid(step, extent)())!,
+        gridOutlinePath: pathGenerator(createGridOutline(step, extent))!,
+      };
+    }, [shown, country, step, extent, world]);
+
+  const labels = useMemo(
+    () => computeLabels(projection, extent, step),
+    [projection, extent, step],
+  );
 
   const handlePointerMove = (e: PointerEvent<SVGSVGElement>) => {
+    // The map is moving and cells are not where `projection` puts them
+    if (animating) return;
     const svg = e.currentTarget;
     const inverse = svg.getScreenCTM()?.inverse();
     if (!inverse) return;
@@ -308,11 +336,14 @@ function Game({ countries, world }: MapData) {
       <div className="flex gap-2">
         <select
           value={projectionName}
-          onChange={(e) => setProjectionName(e.target.value as ProjectionName)}
+          onChange={(e) => {
+            setProjectionName(e.target.value as ProjectionName);
+            setHoveredCell(null);
+          }}
         >
-          {Object.keys(projections).map((name) => (
+          {(Object.keys(projections) as ProjectionName[]).map((name) => (
             <option key={name} value={name}>
-              {name}
+              {projectionLabels[name]}
             </option>
           ))}
         </select>
@@ -359,7 +390,7 @@ function Game({ countries, world }: MapData) {
         viewBox={`0 0 ${width} ${height}`}
         onPointerMove={handlePointerMove}
         onPointerLeave={() => setHoveredCell(null)}
-        onClick={() => setSelectedCell(hoveredCell)}
+        onClick={() => !animating && setSelectedCell(hoveredCell)}
       >
         <path
           d={worldPath}
@@ -387,7 +418,11 @@ function Game({ countries, world }: MapData) {
         )}
         <path d={gridPath} fill="none" stroke="green" strokeWidth={1} />
         <path d={gridOutlinePath} fill="none" stroke="green" strokeWidth={1} />
-        <g fontSize={10} fill="currentColor">
+        <g
+          fontSize={10}
+          fill="currentColor"
+          className={`transition-opacity duration-200 ${animating ? "opacity-0" : ""}`}
+        >
           {labels.meridians.map(({ lon, x, y }) => (
             <text key={`lon${lon}`} x={x} y={y + 14} textAnchor="middle">
               <tspan>{formatLon(lon)}</tspan>
