@@ -1,19 +1,6 @@
 import { useEffect, useMemo, useState, type PointerEvent } from "react";
-import {
-  geoDistance,
-  geoEqualEarth,
-  geoEqualEarthRaw,
-  geoEquirectangular,
-  geoEquirectangularRaw,
-  geoMercator,
-  geoNaturalEarth1,
-  geoNaturalEarth1Raw,
-  geoPath,
-  json,
-  range,
-  type GeoProjection,
-} from "d3";
-import type { Feature, FeatureCollection, Geometry } from "geojson";
+import { geoDistance, geoPath, json, range, type GeoProjection } from "d3";
+import type { FeatureCollection } from "geojson";
 import { feature } from "topojson-client";
 import type { GeometryCollection, Topology } from "topojson-specification";
 import {
@@ -21,6 +8,10 @@ import {
   cellOutline,
   createGrid,
   createGridOutline,
+  gridLines,
+  isWorld,
+  snapExtent,
+  type Grid,
   type GridCell,
 } from "./lib/GridLayer";
 import {
@@ -29,11 +20,19 @@ import {
   type RankedCellShare,
 } from "./lib/countryArea";
 import {
-  clampedMercatorRaw,
-  useViewTransition,
-  viewOf,
-} from "./lib/projectionTransition";
-import { regions, type Extent, type RegionName } from "./lib/regions";
+  generateLevel,
+  randomSeed,
+  type Country,
+  type Difficulty,
+  difficultyRules,
+} from "./lib/level";
+import { useViewTransition, viewOf } from "./lib/projectionTransition";
+import {
+  projectionLabels,
+  projections,
+  type ProjectionName,
+} from "./lib/projections";
+import { regions, type Extent } from "./lib/regions";
 
 const width = 1000;
 const height = 700;
@@ -45,27 +44,13 @@ const frameClip: Extent = [
   [width - padding + 1, height - padding + 1],
 ];
 
-// `raw` is what transitions blend between
-const projections = {
-  geoEqualEarth: { create: geoEqualEarth, raw: geoEqualEarthRaw },
-  geoNaturalEarth1: { create: geoNaturalEarth1, raw: geoNaturalEarth1Raw },
-  geoMercator: { create: geoMercator, raw: clampedMercatorRaw },
-  geoEquirectangular: {
-    create: geoEquirectangular,
-    raw: geoEquirectangularRaw,
-  },
-};
-type ProjectionName = keyof typeof projections;
+/** Longitude in [-180, 180). */
+const normalizeLon = (lon: number) => ((((lon + 180) % 360) + 360) % 360) - 180;
 
-const projectionLabels: Record<ProjectionName, string> = {
-  geoEqualEarth: "Equal Earth",
-  geoNaturalEarth1: "Natural Earth",
-  geoMercator: "Mercator",
-  geoEquirectangular: "Equirectangular",
+const formatLon = (lon: number) => {
+  const l = normalizeLon(lon);
+  return `${Math.abs(l)}°${l < 0 ? "W" : l > 0 && l < 180 ? "E" : ""}`;
 };
-
-const formatLon = (lon: number) =>
-  `${Math.abs(lon)}°${lon < 0 ? "W" : lon > 0 ? "E" : ""}`;
 const formatLat = (lat: number) =>
   `${Math.abs(lat)}°${lat < 0 ? "S" : lat > 0 ? "N" : ""}`;
 
@@ -102,15 +87,10 @@ function firstVisible(
 // Meridians are labelled where they meet the southern edge of the map,
 // parallels where they meet the western edge. Each label shows the degrees
 // and the projected (SVG) coordinate of the label position.
-function computeLabels(
-  projection: GeoProjection,
-  [[lon0, lat0], [lon1, lat1]]: Extent,
-  step: number,
-) {
-  const lons = range(Math.ceil(lon0 / step) * step, lon1 + 1, step);
-  const lats = range(Math.ceil(lat0 / step) * step, lat1 + 1, step).filter(
-    (lat) => Math.abs(lat) < 90,
-  );
+function computeLabels(projection: GeoProjection, extent: Extent, grid: Grid) {
+  const [[lon0, lat0], [lon1, lat1]] = extent;
+  const { lons, lats: allLats } = gridLines(grid, extent);
+  const lats = allLats.filter((lat) => Math.abs(lat) < 90);
   const southToNorth = range(lat0, lat1 + 1, 1);
   const westToEast = range(lon0, lon1 + 1, 1);
   const meridians = lons.flatMap((lon) => {
@@ -129,18 +109,6 @@ function computeLabels(
   });
   return { meridians, parallels };
 }
-
-type Country = Feature<Geometry, { name: string; continent: string }>;
-
-const pickRandomCountry = (
-  countries: Country[],
-  continents: string[] | null,
-): Country => {
-  const pool = continents
-    ? countries.filter((c) => continents.includes(c.properties.continent))
-    : countries;
-  return pool[Math.floor(Math.random() * pool.length)];
-};
 
 const formatKm2 = (km2: number) =>
   `${Math.round(km2).toLocaleString("en-US")} km²`;
@@ -233,48 +201,89 @@ function App() {
   return <Game {...data} />;
 }
 
+const difficulties = Object.keys(difficultyRules) as Difficulty[];
+
+function initialDifficulty(): Difficulty {
+  const param = new URLSearchParams(location.search).get("difficulty");
+  return difficulties.find((d) => d === param) ?? "easy";
+}
+
+function initialSeed() {
+  const param = Number(new URLSearchParams(location.search).get("seed"));
+  return Number.isInteger(param) && param > 0 ? param : randomSeed();
+}
+
 function Game({ countries, world }: MapData) {
-  const [projectionName, setProjectionName] =
-    useState<ProjectionName>("geoEqualEarth");
-  const [regionName, setRegionName] = useState<RegionName>("World");
-  const { continents, extent, step } = regions[regionName];
-  const [country, setCountry] = useState(() =>
-    pickRandomCountry(countries, regions.World.continents),
+  const [difficulty, setDifficulty] = useState(initialDifficulty);
+  const [seed, setSeed] = useState(initialSeed);
+  const level = useMemo(
+    () => generateLevel(seed, difficulty, countries),
+    [seed, difficulty, countries],
   );
+  const country = useMemo(
+    () => countries.find((c) => c.properties.name === level.country)!,
+    [countries, level],
+  );
+  const { grid, regionName } = level;
+  const extent = useMemo(
+    () => snapExtent(regions[regionName].extent, grid),
+    [regionName, grid],
+  );
+  // Lets the player look at the level in another projection
+  const [projectionOverride, setProjectionOverride] =
+    useState<ProjectionName | null>(null);
+  const projectionName = projectionOverride ?? level.projectionName;
+
+  // Shareable: reloading the URL brings back the same level
+  useEffect(() => {
+    const params = new URLSearchParams({ seed: String(seed), difficulty });
+    history.replaceState(null, "", `?${params}`);
+  }, [seed, difficulty]);
 
   const [hoveredCell, setHoveredCell] = useState<GridCell | null>(null);
   const [selectedCell, setSelectedCell] = useState<GridCell | null>(null);
 
+  // Clears what belonged to the previous level
+  const startLevel = () => {
+    setProjectionOverride(null);
+    setSelectedCell(null);
+    setHoveredCell(null);
+  };
+
   const countryCells = useMemo(
-    () => computeCountryCells(country.geometry, step),
-    [country, step],
+    () => computeCountryCells(country.geometry, grid),
+    [country, grid],
   );
   const selectedShare = selectedCell
     ? countryCells.byKey.get(cellKey(selectedCell))
     : undefined;
+
+  // The country stays hidden until the player picks the cell holding most of it
+  const found = selectedShare?.rank === 1;
 
   const target = useMemo(() => {
     const box: Extent = [
       [padding, padding],
       [width - padding, height - padding],
     ];
-    // Rotate the globe so the centre of the region is the centre of the map
+    // Rotate the globe so the centre of the region is the centre of the map.
+    // The world is centred on a grid line, so its edges are grid lines too
+    // and no cell is split across the two sides of the map.
     const [[lon0, lat0], [lon1, lat1]] = extent;
+    const world = isWorld(extent);
+    const centre = world
+      ? [grid.offset[0], 0]
+      : [(lon0 + lon1) / 2, (lat0 + lat1) / 2];
     const { create, raw } = projections[projectionName];
     const projection = create()
-      .rotate([-(lon0 + lon1) / 2, -(lat0 + lat1) / 2])
-      .fitExtent(
-        box,
-        regionName === "World"
-          ? { type: "Sphere" }
-          : createGridOutline(step, extent),
-      );
+      .rotate([-centre[0], -centre[1]])
+      .fitExtent(box, createGridOutline(extent));
     // Keep coastlines and countries inside the region's frame
-    if (regionName !== "World") {
+    if (!world) {
       projection.clipExtent(frameClip);
     }
     return { projection, view: viewOf(raw, projection) };
-  }, [projectionName, regionName, extent, step]);
+  }, [projectionName, extent, grid]);
   // Hit-testing and labels use the target, which has `invert`
   const { projection } = target;
 
@@ -287,14 +296,14 @@ function Game({ countries, world }: MapData) {
         pathGenerator,
         worldPath: pathGenerator(world)!,
         countryPath: pathGenerator(country)!,
-        gridPath: pathGenerator(createGrid(step, extent)())!,
-        gridOutlinePath: pathGenerator(createGridOutline(step, extent))!,
+        gridPath: pathGenerator(createGrid(grid, extent))!,
+        gridOutlinePath: pathGenerator(createGridOutline(extent))!,
       };
-    }, [shown, country, step, extent, world]);
+    }, [shown, country, grid, extent, world]);
 
   const labels = useMemo(
-    () => computeLabels(projection, extent, step),
-    [projection, extent, step],
+    () => computeLabels(projection, extent, grid),
+    [projection, extent, grid],
   );
 
   const handlePointerMove = (e: PointerEvent<SVGSVGElement>) => {
@@ -316,16 +325,13 @@ function Game({ countries, world }: MapData) {
       return;
     }
     const [[lon0, lat0], [lon1, lat1]] = extent;
-    if (
-      lonLat[0] < lon0 ||
-      lonLat[0] >= lon1 ||
-      lonLat[1] < lat0 ||
-      lonLat[1] >= lat1
-    ) {
+    // The frame can run past 180°, where `invert` gives negative longitudes
+    const lon = lonLat[0] < lon0 ? lonLat[0] + 360 : lonLat[0];
+    if (lon >= lon1 || lonLat[1] < lat0 || lonLat[1] >= lat1) {
       setHoveredCell(null);
       return;
     }
-    const cell = cellAt(lonLat, step);
+    const cell = cellAt(lonLat, grid);
     setHoveredCell((prev) =>
       prev && prev.lon0 === cell.lon0 && prev.lat0 === cell.lat0 ? prev : cell,
     );
@@ -335,31 +341,28 @@ function Game({ countries, world }: MapData) {
     <div className="flex h-screen flex-col items-center gap-2 p-4">
       <div className="flex gap-2">
         <select
+          value={difficulty}
+          onChange={(e) => {
+            setDifficulty(e.target.value as Difficulty);
+            startLevel();
+          }}
+        >
+          {difficulties.map((name) => (
+            <option key={name} value={name}>
+              {name[0].toUpperCase() + name.slice(1)}
+            </option>
+          ))}
+        </select>
+        <select
           value={projectionName}
           onChange={(e) => {
-            setProjectionName(e.target.value as ProjectionName);
+            setProjectionOverride(e.target.value as ProjectionName);
             setHoveredCell(null);
           }}
         >
           {(Object.keys(projections) as ProjectionName[]).map((name) => (
             <option key={name} value={name}>
               {projectionLabels[name]}
-            </option>
-          ))}
-        </select>
-        <select
-          value={regionName}
-          onChange={(e) => {
-            const next = e.target.value as RegionName;
-            setRegionName(next);
-            setCountry(pickRandomCountry(countries, regions[next].continents));
-            setSelectedCell(null);
-            setHoveredCell(null);
-          }}
-        >
-          {Object.keys(regions).map((name) => (
-            <option key={name} value={name}>
-              {name}
             </option>
           ))}
         </select>
@@ -370,11 +373,11 @@ function Game({ countries, world }: MapData) {
           type="button"
           className="rounded border px-2 py-0.5"
           onClick={() => {
-            setCountry(pickRandomCountry(countries, continents));
-            setSelectedCell(null);
+            setSeed(randomSeed());
+            startLevel();
           }}
         >
-          New country
+          Next level
         </button>
       </div>
       <CellInfo
@@ -398,7 +401,7 @@ function Game({ countries, world }: MapData) {
           stroke="currentColor"
           strokeWidth={0.6}
         />
-        <path d={countryPath} fill="orange" stroke="currentColor" />
+        {found && <path d={countryPath} fill="orange" stroke="currentColor" />}
         {hoveredCell && (
           <path
             d={pathGenerator(cellOutline(hoveredCell))!}

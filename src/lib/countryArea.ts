@@ -4,7 +4,7 @@ import polygonClipping, {
   type Ring,
 } from "polygon-clipping";
 import type { Geometry } from "geojson";
-import { cellAt, type GridCell } from "./GridLayer";
+import { cellAt, lineBelow, type Grid, type GridCell } from "./GridLayer";
 
 const EARTH_RADIUS_KM = 6371.0088;
 const RAD = Math.PI / 180;
@@ -46,7 +46,12 @@ function multiPolygonArea(multiPolygon: MultiPolygon) {
   return area;
 }
 
-function cellToPlane({ lon0, lat0, lon1, lat1 }: GridCell): MultiPolygon {
+function rectangleToPlane(
+  lon0: number,
+  lat0: number,
+  lon1: number,
+  lat1: number,
+): MultiPolygon {
   const [x0, y0] = toPlane([lon0, lat0]);
   const [x1, y1] = toPlane([lon1, lat1]);
   return [
@@ -59,6 +64,15 @@ function cellToPlane({ lon0, lat0, lon1, lat1 }: GridCell): MultiPolygon {
         [x0, y0],
       ],
     ],
+  ];
+}
+
+/** A cell wrapping past 180° becomes two rectangles, one on either side. */
+function cellToPlane({ lon0, lat0, lon1, lat1 }: GridCell): MultiPolygon {
+  if (lon1 <= 180) return rectangleToPlane(lon0, lat0, lon1, lat1);
+  return [
+    ...rectangleToPlane(lon0, lat0, 180, lat1),
+    ...rectangleToPlane(-180, lat0, lon1 - 360, lat1),
   ];
 }
 
@@ -88,19 +102,18 @@ export interface CountryCells {
   byKey: Map<string, RankedCellShare>;
 }
 
-/** How a country's area is split over the cells of a `step`-degree grid. */
-export function computeCountryCells(
-  geometry: Geometry,
-  step: number,
-): CountryCells {
-  const country = geometryToPlane(geometry);
+/** Area of a country, in km². */
+export function countryAreaKm2(geometry: Geometry) {
+  return multiPolygonArea(geometryToPlane(geometry)) * EARTH_RADIUS_KM ** 2;
+}
 
-  // Lon/lat bounding box, to skip cells that cannot overlap
+/** Lon/lat bounding box of a geometry, skipping holes. */
+export function countryBounds(geometry: Geometry) {
   let minLon = 180;
   let maxLon = -180;
   let minLat = 90;
   let maxLat = -90;
-  for (const polygon of country) {
+  for (const polygon of geometryToPlane(geometry)) {
     for (const [x, y] of polygon[0]) {
       minLon = Math.min(minLon, x / RAD);
       maxLon = Math.max(maxLon, x / RAD);
@@ -109,13 +122,35 @@ export function computeCountryCells(
       maxLat = Math.max(maxLat, lat);
     }
   }
+  return { minLon, maxLon, minLat, maxLat };
+}
+
+/** How a country's area is split over the cells of `grid`. */
+export function computeCountryCells(
+  geometry: Geometry,
+  grid: Grid,
+): CountryCells {
+  const country = geometryToPlane(geometry);
+
+  // Only cells within the bounding box can overlap
+  const { minLon, maxLon, minLat, maxLat } = countryBounds(geometry);
+  const { step, offset } = grid;
+  // Walk the grid lines themselves: cells' own bounds wrap and clamp
+  const startLon = lineBelow(minLon, step, offset[0]);
+  const startLat = lineBelow(minLat, step, offset[1]);
 
   const found: Omit<CellShare, "share">[] = [];
-  const first = cellAt([minLon, minLat], step);
-  for (let lon = first.lon0; lon < maxLon; lon += step) {
-    for (let lat = first.lat0; lat < maxLat; lat += step) {
-      const cell = cellAt([lon, lat], step);
-      const sr = multiPolygonArea(polygonClipping.intersection(country, cellToPlane(cell)));
+  // A cell wrapping round 180° is reached from both of its sides
+  const seen = new Set<string>();
+  for (let lon = startLon; lon < maxLon; lon += step) {
+    for (let lat = startLat; lat < maxLat; lat += step) {
+      const cell = cellAt([lon, lat], grid);
+      const key = cellKey(cell);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const sr = multiPolygonArea(
+        polygonClipping.intersection(country, cellToPlane(cell)),
+      );
       if (sr <= 0) continue;
       const areaKm2 = sr * EARTH_RADIUS_KM ** 2;
       found.push({ cell, areaKm2, coverage: areaKm2 / cellAreaKm2(cell) });

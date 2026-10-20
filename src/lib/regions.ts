@@ -3,10 +3,13 @@ export type Extent = [[number, number], [number, number]];
 export interface Region {
   /** Natural Earth `continent`s of the countries to pick from; null for all. */
   continents: string[] | null;
-  /** [[lon0, lat0], [lon1, lat1]] shown on the map; multiples of `step`. */
+  /**
+   * [[lon0, lat0], [lon1, lat1]] the map shows; it grows to the nearest grid
+   * lines once the level's grid is known.
+   */
   extent: Extent;
-  /** Grid cell size in degrees of longitude/latitude. */
-  step: number;
+  /** Grid cell sizes, in degrees, a level in this region can use. */
+  steps: number[];
 }
 
 export const regions = {
@@ -16,7 +19,7 @@ export const regions = {
       [-180, -90],
       [180, 90],
     ],
-    step: 30,
+    steps: [20, 30],
   },
   Europe: {
     continents: ["Europe"],
@@ -24,7 +27,7 @@ export const regions = {
       [-30, 30],
       [60, 80],
     ],
-    step: 10,
+    steps: [5, 10],
   },
   Asia: {
     continents: ["Asia"],
@@ -32,7 +35,7 @@ export const regions = {
       [30, -15],
       [180, 75],
     ],
-    step: 15,
+    steps: [10, 15],
   },
   Eurasia: {
     continents: ["Europe", "Asia"],
@@ -40,7 +43,7 @@ export const regions = {
       [-30, -15],
       [180, 75],
     ],
-    step: 15,
+    steps: [10, 15],
   },
   Africa: {
     continents: ["Africa"],
@@ -48,7 +51,7 @@ export const regions = {
       [-30, -45],
       [60, 45],
     ],
-    step: 15,
+    steps: [10, 15],
   },
 } satisfies Record<string, Region>;
 
