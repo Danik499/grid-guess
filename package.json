@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "data": "mapshaper -i data/countries.geo.json name=countries -filter-fields name,continent -o format=topojson quantization=1e5 public/countries.topo.json && mapshaper -i data/ne_50m_coastline.geo.json name=coastline -o format=topojson quantization=1e5 public/coastline.topo.json"
+    "data": "mapshaper -i data/countries-low.geo.json name=countries -filter-fields name,continent -o format=topojson quantization=1e5 public/countries-low.topo.json && mapshaper -i data/countries-medium.geo.json name=countries -filter-fields name,continent -o format=topojson quantization=1e5 public/countries-medium.topo.json && mapshaper -i data/ne_50m_coastline.geo.json name=coastline -o format=topojson quantization=1e5 public/coastline.topo.json"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",

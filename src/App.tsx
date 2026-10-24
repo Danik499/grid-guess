@@ -158,7 +158,10 @@ function CellInfo({
 }
 
 interface MapData {
+  /** Low-poly countries, used for calculations */
   countries: Country[];
+  /** Medium-poly countries by name, used for drawing */
+  displayCountries: Map<string, Country>;
   world: FeatureCollection;
 }
 
@@ -171,13 +174,20 @@ type CoastlineTopology = Topology<{ coastline: GeometryCollection }>;
 // stays out of the JS bundle
 async function loadMapData(): Promise<MapData> {
   const base = import.meta.env.BASE_URL;
-  const [countries, coastline] = await Promise.all([
-    json<CountriesTopology>(`${base}countries.topo.json`),
+  const [countries, displayCountries, coastline] = await Promise.all([
+    json<CountriesTopology>(`${base}countries-low.topo.json`),
+    json<CountriesTopology>(`${base}countries-medium.topo.json`),
     json<CoastlineTopology>(`${base}coastline.topo.json`),
   ]);
-  if (!countries || !coastline) throw new Error("Map data is empty");
+  if (!countries || !displayCountries || !coastline) throw new Error("Map data is empty");
   return {
     countries: feature(countries, countries.objects.countries).features,
+    displayCountries: new Map(
+      feature(
+        displayCountries,
+        displayCountries.objects.countries,
+      ).features.map((c) => [c.properties.name, c]),
+    ),
     world: feature(coastline, coastline.objects.coastline),
   };
 }
@@ -213,7 +223,7 @@ function initialSeed() {
   return Number.isInteger(param) && param > 0 ? param : randomSeed();
 }
 
-function Game({ countries, world }: MapData) {
+function Game({ countries, displayCountries, world }: MapData) {
   const [difficulty, setDifficulty] = useState(initialDifficulty);
   const [seed, setSeed] = useState(initialSeed);
   const level = useMemo(
@@ -224,6 +234,7 @@ function Game({ countries, world }: MapData) {
     () => countries.find((c) => c.properties.name === level.country)!,
     [countries, level],
   );
+  const displayCountry = displayCountries.get(level.country) ?? country;
   const { grid, regionName } = level;
   const extent = useMemo(
     () => snapExtent(regions[regionName].extent, grid),
@@ -295,11 +306,11 @@ function Game({ countries, world }: MapData) {
       return {
         pathGenerator,
         worldPath: pathGenerator(world)!,
-        countryPath: pathGenerator(country)!,
+        countryPath: pathGenerator(displayCountry)!,
         gridPath: pathGenerator(createGrid(grid, extent))!,
         gridOutlinePath: pathGenerator(createGridOutline(extent))!,
       };
-    }, [shown, country, grid, extent, world]);
+    }, [shown, displayCountry, grid, extent, world]);
 
   const labels = useMemo(
     () => computeLabels(projection, extent, grid),
