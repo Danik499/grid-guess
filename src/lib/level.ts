@@ -169,3 +169,5 @@ export function generateLevel(
   }
   throw new Error(`No ${difficulty} level found for seed ${seed}`);
 }
+
+export const difficulties = Object.keys(difficultyRules) as Difficulty[];

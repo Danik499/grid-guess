@@ -120,3 +120,6 @@ export function cellOutline({ lon0, lat0, lon1, lat1 }: GridCell) {
     [lon1, lat1],
   ]);
 }
+
+export const sameCell = (a: GridCell, b: GridCell) =>
+  a.lon0 === b.lon0 && a.lat0 === b.lat0;
