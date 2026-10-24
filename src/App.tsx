@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type PointerEvent } from "react";
-import { geoDistance, geoPath, json, range, type GeoProjection } from "d3";
+import { geoPath, json } from "d3";
 import type { FeatureCollection } from "geojson";
 import { feature } from "topojson-client";
 import type { GeometryCollection, Topology } from "topojson-specification";
@@ -8,10 +8,8 @@ import {
   cellOutline,
   createGrid,
   createGridOutline,
-  gridLines,
   isWorld,
   snapExtent,
-  type Grid,
   type GridCell,
 } from "./lib/GridLayer";
 import {
@@ -36,7 +34,6 @@ import { regions, type Extent } from "./lib/regions";
 
 const width = 1000;
 const height = 700;
-// Leaves room around the map for the axis labels
 const padding = 50;
 // Region views are clipped to this frame, and so is every transition frame
 const frameClip: Extent = [
@@ -53,62 +50,6 @@ const formatLon = (lon: number) => {
 };
 const formatLat = (lat: number) =>
   `${Math.abs(lat)}°${lat < 0 ? "S" : lat > 0 ? "N" : ""}`;
-
-/**
- * Projects a point and returns its SVG position, or null when it is not
- * drawn: infinite (Mercator poles), outside the SVG, or on the far side of
- * the globe (the point does not survive a round trip through `invert`).
- */
-function projectVisible(
-  projection: GeoProjection,
-  point: [number, number],
-): [number, number] | null {
-  const xy = projection(point);
-  if (!xy || !xy.every(Number.isFinite)) return null;
-  const [x, y] = xy;
-  if (x < 0 || x > width || y < 0 || y > height) return null;
-  const back = projection.invert?.(xy);
-  if (!back || geoDistance(back, point) > 1e-6) return null;
-  return xy;
-}
-
-/** First visible point along `candidates`, in order. */
-function firstVisible(
-  projection: GeoProjection,
-  candidates: [number, number][],
-) {
-  for (const point of candidates) {
-    const xy = projectVisible(projection, point);
-    if (xy) return xy;
-  }
-  return null;
-}
-
-// Meridians are labelled where they meet the southern edge of the map,
-// parallels where they meet the western edge. Each label shows the degrees
-// and the projected (SVG) coordinate of the label position.
-function computeLabels(projection: GeoProjection, extent: Extent, grid: Grid) {
-  const [[lon0, lat0], [lon1, lat1]] = extent;
-  const { lons, lats: allLats } = gridLines(grid, extent);
-  const lats = allLats.filter((lat) => Math.abs(lat) < 90);
-  const southToNorth = range(lat0, lat1 + 1, 1);
-  const westToEast = range(lon0, lon1 + 1, 1);
-  const meridians = lons.flatMap((lon) => {
-    const xy = firstVisible(
-      projection,
-      southToNorth.map((lat) => [lon, lat]),
-    );
-    return xy ? [{ lon, x: xy[0], y: xy[1] }] : [];
-  });
-  const parallels = lats.flatMap((lat) => {
-    const xy = firstVisible(
-      projection,
-      westToEast.map((lon) => [lon, lat]),
-    );
-    return xy ? [{ lat, x: xy[0], y: xy[1] }] : [];
-  });
-  return { meridians, parallels };
-}
 
 const formatKm2 = (km2: number) =>
   `${Math.round(km2).toLocaleString("en-US")} km²`;
@@ -295,7 +236,7 @@ function Game({ countries, displayCountries, world }: MapData) {
     }
     return { projection, view: viewOf(raw, projection) };
   }, [projectionName, extent, grid]);
-  // Hit-testing and labels use the target, which has `invert`
+  // Hit-testing uses the target, which has `invert`
   const { projection } = target;
 
   const { projection: shown, animating } = useViewTransition(target, frameClip);
@@ -311,11 +252,6 @@ function Game({ countries, displayCountries, world }: MapData) {
         gridOutlinePath: pathGenerator(createGridOutline(extent))!,
       };
     }, [shown, displayCountry, grid, extent, world]);
-
-  const labels = useMemo(
-    () => computeLabels(projection, extent, grid),
-    [projection, extent, grid],
-  );
 
   const handlePointerMove = (e: PointerEvent<SVGSVGElement>) => {
     // The map is moving and cells are not where `projection` puts them
@@ -432,28 +368,6 @@ function Game({ countries, displayCountries, world }: MapData) {
         )}
         <path d={gridPath} fill="none" stroke="green" strokeWidth={1} />
         <path d={gridOutlinePath} fill="none" stroke="green" strokeWidth={1} />
-        <g
-          fontSize={10}
-          fill="currentColor"
-          className={`transition-opacity duration-200 ${animating ? "opacity-0" : ""}`}
-        >
-          {labels.meridians.map(({ lon, x, y }) => (
-            <text key={`lon${lon}`} x={x} y={y + 14} textAnchor="middle">
-              <tspan>{formatLon(lon)}</tspan>
-              <tspan x={x} dy={11}>
-                x={Math.round(x)}
-              </tspan>
-            </text>
-          ))}
-          {labels.parallels.map(({ lat, x, y }) => (
-            <text key={`lat${lat}`} x={x - 6} y={y - 2} textAnchor="end">
-              <tspan>{formatLat(lat)}</tspan>
-              <tspan x={x - 6} dy={11}>
-                y={Math.round(y)}
-              </tspan>
-            </text>
-          ))}
-        </g>
       </svg>
     </div>
   );
