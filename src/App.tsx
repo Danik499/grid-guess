@@ -15,13 +15,30 @@ import {
 import {
   cellKey,
   computeCountryCells,
+  type CountryCells,
   type RankedCellShare,
 } from "./lib/countryArea";
+import {
+  MAX_POINTS,
+  TRIES_PER_ROUND,
+  dailyKey,
+  dailyLevels,
+  dailyNumber,
+  dailyRounds,
+  loadProgress,
+  newProgress,
+  pointsFor,
+  roundOver,
+  saveProgress,
+  type DailyProgress,
+  type RoundProgress,
+} from "./lib/daily";
 import {
   generateLevel,
   randomSeed,
   type Country,
   type Difficulty,
+  type Level,
   difficultyRules,
 } from "./lib/level";
 import { useViewTransition, viewOf } from "./lib/projectionTransition";
@@ -107,7 +124,8 @@ async function loadMapData(): Promise<MapData> {
     json<CountriesTopology>(`${base}countries-medium.topo.json`),
     json<CoastlineTopology>(`${base}coastline.topo.json`),
   ]);
-  if (!countries || !displayCountries || !coastline) throw new Error("Map data is empty");
+  if (!countries || !displayCountries || !coastline)
+    throw new Error("Map data is empty");
   return {
     countries: feature(countries, countries.objects.countries).features,
     displayCountries: new Map(
@@ -120,9 +138,17 @@ async function loadMapData(): Promise<MapData> {
   };
 }
 
+type Mode = "daily" | "random";
+
+const initialMode = (): Mode =>
+  new URLSearchParams(location.search).get("mode") === "random"
+    ? "random"
+    : "daily";
+
 function App() {
   const [data, setData] = useState<MapData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [mode, setMode] = useState(initialMode);
 
   useEffect(() => {
     loadMapData()
@@ -130,75 +156,88 @@ function App() {
       .catch((e: unknown) => setError(String(e)));
   }, []);
 
+  // Daily is the default, so its URL carries nothing; random levels write
+  // their own parameters
+  useEffect(() => {
+    if (mode === "daily") history.replaceState(null, "", location.pathname);
+  }, [mode]);
+
   if (error) {
     return <div className="p-4">Could not load map data: {error}</div>;
   }
   if (!data) {
     return <div className="p-4 opacity-60">Loading map…</div>;
   }
-  return <Game {...data} />;
-}
-
-const difficulties = Object.keys(difficultyRules) as Difficulty[];
-
-function initialDifficulty(): Difficulty {
-  const param = new URLSearchParams(location.search).get("difficulty");
-  return difficulties.find((d) => d === param) ?? "easy";
-}
-
-function initialSeed() {
-  const param = Number(new URLSearchParams(location.search).get("seed"));
-  return Number.isInteger(param) && param > 0 ? param : randomSeed();
-}
-
-function Game({ countries, displayCountries, world }: MapData) {
-  const [difficulty, setDifficulty] = useState(initialDifficulty);
-  const [seed, setSeed] = useState(initialSeed);
-  const level = useMemo(
-    () => generateLevel(seed, difficulty, countries),
-    [seed, difficulty, countries],
+  return (
+    <div className="flex h-screen flex-col items-center gap-2 p-4">
+      <div className="flex gap-1">
+        {(["daily", "random"] as const).map((m) => (
+          <button
+            key={m}
+            type="button"
+            className={`rounded border px-3 py-0.5 ${m === mode ? "font-semibold" : "opacity-60"}`}
+            onClick={() => setMode(m)}
+          >
+            {m === "daily" ? "Daily" : "Random"}
+          </button>
+        ))}
+      </div>
+      {mode === "daily" ? (
+        <DailyGame {...data} onPlayRandom={() => setMode("random")} />
+      ) : (
+        <RandomGame {...data} />
+      )}
+    </div>
   );
+}
+
+/** The level's country, for calculations and for drawing, and its cells. */
+function useLevelCountry(
+  level: Level,
+  { countries, displayCountries }: MapData,
+) {
   const country = useMemo(
     () => countries.find((c) => c.properties.name === level.country)!,
     [countries, level],
   );
   const displayCountry = displayCountries.get(level.country) ?? country;
+  const countryCells = useMemo(
+    () => computeCountryCells(country.geometry, level.grid),
+    [country, level],
+  );
+  return { country, displayCountry, countryCells };
+}
+
+const sameCell = (a: GridCell, b: GridCell) =>
+  a.lon0 === b.lon0 && a.lat0 === b.lat0;
+
+function LevelMap({
+  level,
+  displayCountry,
+  countryCells,
+  world,
+  projectionName,
+  marked,
+  revealed,
+  onCellClick,
+}: {
+  level: Level;
+  displayCountry: Country;
+  countryCells: CountryCells;
+  world: FeatureCollection;
+  projectionName: ProjectionName;
+  /** Cells the player picked, outlined in red. */
+  marked: GridCell[];
+  /** Shows the country and how it splits over the cells. */
+  revealed: boolean;
+  /** Leave out to make the map ignore the pointer. */
+  onCellClick?: (cell: GridCell) => void;
+}) {
   const { grid, regionName } = level;
   const extent = useMemo(
     () => snapExtent(regions[regionName].extent, grid),
     [regionName, grid],
   );
-  // Lets the player look at the level in another projection
-  const [projectionOverride, setProjectionOverride] =
-    useState<ProjectionName | null>(null);
-  const projectionName = projectionOverride ?? level.projectionName;
-
-  // Shareable: reloading the URL brings back the same level
-  useEffect(() => {
-    const params = new URLSearchParams({ seed: String(seed), difficulty });
-    history.replaceState(null, "", `?${params}`);
-  }, [seed, difficulty]);
-
-  const [hoveredCell, setHoveredCell] = useState<GridCell | null>(null);
-  const [selectedCell, setSelectedCell] = useState<GridCell | null>(null);
-
-  // Clears what belonged to the previous level
-  const startLevel = () => {
-    setProjectionOverride(null);
-    setSelectedCell(null);
-    setHoveredCell(null);
-  };
-
-  const countryCells = useMemo(
-    () => computeCountryCells(country.geometry, grid),
-    [country, grid],
-  );
-  const selectedShare = selectedCell
-    ? countryCells.byKey.get(cellKey(selectedCell))
-    : undefined;
-
-  // The country stays hidden until the player picks the cell holding most of it
-  const found = selectedShare?.rank === 1;
 
   const target = useMemo(() => {
     const box: Extent = [
@@ -228,6 +267,15 @@ function Game({ countries, displayCountries, world }: MapData) {
 
   const { projection: shown, animating } = useViewTransition(target, frameClip);
 
+  // A hovered cell belongs to the view it was found in, so it is dropped as
+  // soon as the level or the projection changes
+  const [hover, setHover] = useState<{
+    cell: GridCell;
+    projection: typeof projection;
+  } | null>(null);
+  const hoveredCell =
+    onCellClick && hover?.projection === projection ? hover.cell : null;
+
   const { pathGenerator, worldPath, countryPath, gridPath, gridOutlinePath } =
     useMemo(() => {
       const pathGenerator = geoPath(shown);
@@ -240,9 +288,24 @@ function Game({ countries, displayCountries, world }: MapData) {
       };
     }, [shown, displayCountry, grid, extent, world]);
 
+  const heatmap = useMemo(() => {
+    if (!revealed) return [];
+    const best = countryCells.cells[0].share;
+    return countryCells.cells.map(({ cell, share }) => {
+      const outline = cellOutline(cell);
+      return {
+        key: cellKey(cell),
+        path: pathGenerator(outline)!,
+        centre: pathGenerator.centroid(outline),
+        weight: share / best,
+        label: share < 0.01 ? "<1%" : `${Math.round(share * 100)}%`,
+      };
+    });
+  }, [revealed, countryCells, pathGenerator]);
+
   const handlePointerMove = (e: PointerEvent<SVGSVGElement>) => {
     // The map is moving and cells are not where `projection` puts them
-    if (animating) return;
+    if (animating || !onCellClick) return;
     const svg = e.currentTarget;
     const inverse = svg.getScreenCTM()?.inverse();
     if (!inverse) return;
@@ -255,24 +318,159 @@ function Game({ countries, displayCountries, world }: MapData) {
     // something that does not project back to where the pointer is.
     const back = lonLat && projection(lonLat);
     if (!lonLat || !back || Math.hypot(back[0] - x, back[1] - y) > 0.5) {
-      setHoveredCell(null);
+      setHover(null);
       return;
     }
     const [[lon0, lat0], [lon1, lat1]] = extent;
     // The frame can run past 180°, where `invert` gives negative longitudes
     const lon = lonLat[0] < lon0 ? lonLat[0] + 360 : lonLat[0];
     if (lon >= lon1 || lonLat[1] < lat0 || lonLat[1] >= lat1) {
-      setHoveredCell(null);
+      setHover(null);
       return;
     }
     const cell = cellAt(lonLat, grid);
-    setHoveredCell((prev) =>
-      prev && prev.lon0 === cell.lon0 && prev.lat0 === cell.lat0 ? prev : cell,
+    setHover((prev) =>
+      prev && prev.projection === projection && sameCell(prev.cell, cell)
+        ? prev
+        : { cell, projection },
     );
   };
 
   return (
-    <div className="flex h-screen flex-col items-center gap-2 p-4">
+    <svg
+      className="min-h-0 w-full flex-1"
+      viewBox={`0 0 ${width} ${height}`}
+      onPointerMove={handlePointerMove}
+      onPointerLeave={() => setHover(null)}
+      onClick={() => !animating && hoveredCell && onCellClick?.(hoveredCell)}
+    >
+      <path d={worldPath} fill="none" stroke="currentColor" strokeWidth={0.6} />
+      {heatmap.map(({ key, path, weight }) => (
+        <path
+          key={key}
+          d={path}
+          fill="steelblue"
+          fillOpacity={0.15 + 0.45 * weight}
+          pointerEvents="none"
+        />
+      ))}
+      {revealed && (
+        <path
+          d={countryPath}
+          fill="orange"
+          fillOpacity={0.8}
+          stroke="currentColor"
+        />
+      )}
+      {hoveredCell && (
+        <path
+          d={pathGenerator(cellOutline(hoveredCell))!}
+          fill="green"
+          fillOpacity={0.3}
+          pointerEvents="none"
+        />
+      )}
+      <path d={gridPath} fill="none" stroke="green" strokeWidth={1} />
+      <path d={gridOutlinePath} fill="none" stroke="green" strokeWidth={1} />
+      {marked.map((cell) => (
+        <path
+          key={cellKey(cell)}
+          d={pathGenerator(cellOutline(cell))!}
+          fill="none"
+          stroke="red"
+          strokeWidth={3}
+          pointerEvents="none"
+        />
+      ))}
+      {revealed && (
+        <path
+          d={pathGenerator(cellOutline(countryCells.cells[0].cell))!}
+          fill="none"
+          stroke="limegreen"
+          strokeWidth={4}
+          pointerEvents="none"
+        />
+      )}
+      <g
+        fontSize={14}
+        fontWeight={600}
+        fill="currentColor"
+        stroke="var(--bg)"
+        strokeWidth={3}
+        paintOrder="stroke"
+        textAnchor="middle"
+        dominantBaseline="middle"
+        pointerEvents="none"
+        className={`transition-opacity duration-200 ${animating ? "opacity-0" : ""}`}
+      >
+        {heatmap.map(
+          ({ key, centre: [x, y], label }) =>
+            Number.isFinite(x) && (
+              <text key={key} x={x} y={y}>
+                {label}
+              </text>
+            ),
+        )}
+      </g>
+    </svg>
+  );
+}
+
+const difficulties = Object.keys(difficultyRules) as Difficulty[];
+
+function initialDifficulty(): Difficulty {
+  const param = new URLSearchParams(location.search).get("difficulty");
+  return difficulties.find((d) => d === param) ?? "easy";
+}
+
+function initialSeed() {
+  const param = Number(new URLSearchParams(location.search).get("seed"));
+  return Number.isInteger(param) && param > 0 ? param : randomSeed();
+}
+
+function RandomGame(data: MapData) {
+  const [difficulty, setDifficulty] = useState(initialDifficulty);
+  const [seed, setSeed] = useState(initialSeed);
+  const level = useMemo(
+    () => generateLevel(seed, difficulty, data.countries),
+    [seed, difficulty, data.countries],
+  );
+  const { country, displayCountry, countryCells } = useLevelCountry(
+    level,
+    data,
+  );
+  // Lets the player look at the level in another projection
+  const [projectionOverride, setProjectionOverride] =
+    useState<ProjectionName | null>(null);
+  const projectionName = projectionOverride ?? level.projectionName;
+
+  // Shareable: reloading the URL brings back the same level
+  useEffect(() => {
+    const params = new URLSearchParams({
+      mode: "random",
+      seed: String(seed),
+      difficulty,
+    });
+    history.replaceState(null, "", `?${params}`);
+  }, [seed, difficulty]);
+
+  const [selectedCell, setSelectedCell] = useState<GridCell | null>(null);
+
+  // Clears what belonged to the previous level
+  const startLevel = () => {
+    setProjectionOverride(null);
+    setSelectedCell(null);
+  };
+
+  const selectedShare = selectedCell
+    ? countryCells.byKey.get(cellKey(selectedCell))
+    : undefined;
+
+  // The country stays hidden until the player picks the cell holding most of it
+  const found = selectedShare?.rank === 1;
+
+  return (
+    <>
       <div className="flex gap-2">
         <select
           value={difficulty}
@@ -289,10 +487,9 @@ function Game({ countries, displayCountries, world }: MapData) {
         </select>
         <select
           value={projectionName}
-          onChange={(e) => {
-            setProjectionOverride(e.target.value as ProjectionName);
-            setHoveredCell(null);
-          }}
+          onChange={(e) =>
+            setProjectionOverride(e.target.value as ProjectionName)
+          }
         >
           {(Object.keys(projections) as ProjectionName[]).map((name) => (
             <option key={name} value={name}>
@@ -322,40 +519,207 @@ function Game({ countries, displayCountries, world }: MapData) {
         best={countryCells.cells[0]}
         totalKm2={countryCells.totalKm2}
       />
-      <svg
-        className="min-h-0 w-full flex-1"
-        viewBox={`0 0 ${width} ${height}`}
-        onPointerMove={handlePointerMove}
-        onPointerLeave={() => setHoveredCell(null)}
-        onClick={() => !animating && setSelectedCell(hoveredCell)}
+      <LevelMap
+        level={level}
+        displayCountry={displayCountry}
+        countryCells={countryCells}
+        world={data.world}
+        projectionName={projectionName}
+        marked={selectedCell ? [selectedCell] : []}
+        revealed={found}
+        onCellClick={setSelectedCell}
+      />
+    </>
+  );
+}
+
+/** Saved progress, if it fits today's rounds. */
+function resumeProgress(key: string): DailyProgress {
+  const saved = loadProgress(key);
+  return saved?.rounds?.length === dailyRounds.length ? saved : newProgress();
+}
+
+function DailyGame({
+  onPlayRandom,
+  ...data
+}: MapData & { onPlayRandom: () => void }) {
+  // Fixed when the page opens, so midnight does not swap the levels mid-game
+  const [key] = useState(() => dailyKey(new Date()));
+  const levels = useMemo(
+    () => dailyLevels(key, data.countries),
+    [key, data.countries],
+  );
+  const [progress, setProgress] = useState(() => resumeProgress(key));
+  useEffect(() => saveProgress(key, progress), [key, progress]);
+
+  const title = `Daily #${dailyNumber(key)}`;
+  if (progress.current >= levels.length) {
+    return (
+      <DailySummary
+        title={title}
+        levels={levels}
+        progress={progress}
+        onPlayRandom={onPlayRandom}
+      />
+    );
+  }
+  const index = progress.current;
+  const updateRound = (round: RoundProgress) =>
+    setProgress((p) => ({
+      ...p,
+      rounds: p.rounds.map((r, i) => (i === index ? round : r)),
+    }));
+  return (
+    <DailyRound
+      {...data}
+      title={title}
+      index={index}
+      level={levels[index]}
+      round={progress.rounds[index]}
+      onRoundChange={updateRound}
+      onNext={() => setProgress((p) => ({ ...p, current: p.current + 1 }))}
+    />
+  );
+}
+
+function DailyRound({
+  title,
+  index,
+  level,
+  round,
+  onRoundChange,
+  onNext,
+  ...data
+}: MapData & {
+  title: string;
+  index: number;
+  level: Level;
+  round: RoundProgress;
+  onRoundChange: (round: RoundProgress) => void;
+  onNext: () => void;
+}) {
+  const { country, displayCountry, countryCells } = useLevelCountry(
+    level,
+    data,
+  );
+  const name = country.properties.name;
+  const over = roundOver(round);
+  const best = countryCells.cells[0];
+
+  const handleClick = (cell: GridCell) => {
+    if (over || round.tries.some((t) => sameCell(t, cell))) return;
+    const share = countryCells.byKey.get(cellKey(cell));
+    onRoundChange({
+      tries: [...round.tries, cell],
+      found: share?.rank === 1,
+    });
+  };
+
+  const last = index === dailyRounds.length - 1;
+  return (
+    <>
+      <div className="flex items-center gap-3">
+        <span className="opacity-60">
+          {title} · Round {index + 1}/{dailyRounds.length}
+        </span>
+        <span className="text-xl font-semibold">{name}</span>
+        <span className="opacity-60">
+          {over
+            ? `${pointsFor(round)} ${pointsFor(round) === 1 ? "point" : "points"}`
+            : `Try ${round.tries.length + 1}/${TRIES_PER_ROUND}`}
+        </span>
+        {over && (
+          <button
+            type="button"
+            className="rounded border px-2 py-0.5"
+            onClick={onNext}
+          >
+            {last ? "See results" : "Next round"}
+          </button>
+        )}
+      </div>
+      <ol className="h-16 text-sm">
+        {round.tries.length === 0 && (
+          <li className="opacity-60">
+            Click the cell that holds the biggest part of {name}.
+          </li>
+        )}
+        {round.tries.map((cell, i) => {
+          const share = countryCells.byKey.get(cellKey(cell));
+          return (
+            <li key={cellKey(cell)}>
+              {i + 1}.{" "}
+              {!share
+                ? `No part of ${name}`
+                : share.rank === 1
+                  ? `Found it: ${formatPercent(share.share)} of ${name}`
+                  : `Rank ${share.rank} of ${countryCells.cells.length} · ${formatPercent(share.share / best.share)} of the best cell`}
+            </li>
+          );
+        })}
+      </ol>
+      <LevelMap
+        level={level}
+        displayCountry={displayCountry}
+        countryCells={countryCells}
+        world={data.world}
+        projectionName={level.projectionName}
+        marked={round.found ? round.tries.slice(0, -1) : round.tries}
+        revealed={over}
+        onCellClick={over ? undefined : handleClick}
+      />
+    </>
+  );
+}
+
+function DailySummary({
+  title,
+  levels,
+  progress,
+  onPlayRandom,
+}: {
+  title: string;
+  levels: Level[];
+  progress: DailyProgress;
+  onPlayRandom: () => void;
+}) {
+  const total = progress.rounds.reduce((sum, r) => sum + pointsFor(r), 0);
+  return (
+    <div className="flex flex-col items-center gap-3 pt-8">
+      <div className="opacity-60">{title}</div>
+      <div className="text-3xl font-semibold">
+        {total} / {MAX_POINTS}
+      </div>
+      <table className="text-sm">
+        <tbody>
+          {levels.map((level, i) => {
+            const round = progress.rounds[i];
+            const points = pointsFor(round);
+            return (
+              <tr key={level.country}>
+                <td className="pr-4 capitalize opacity-60">{dailyRounds[i]}</td>
+                <td className="pr-4 font-semibold">{level.country}</td>
+                <td className="pr-4">
+                  {round.found
+                    ? `found on try ${round.tries.length}`
+                    : "not found"}
+                </td>
+                <td className="text-right">
+                  {points} {points === 1 ? "point" : "points"}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <div className="opacity-60">Come back tomorrow for a new challenge.</div>
+      <button
+        type="button"
+        className="rounded border px-3 py-1"
+        onClick={onPlayRandom}
       >
-        <path
-          d={worldPath}
-          fill="none"
-          stroke="currentColor"
-          strokeWidth={0.6}
-        />
-        {found && <path d={countryPath} fill="orange" stroke="currentColor" />}
-        {hoveredCell && (
-          <path
-            d={pathGenerator(cellOutline(hoveredCell))!}
-            fill="green"
-            fillOpacity={0.3}
-            pointerEvents="none"
-          />
-        )}
-        {selectedCell && (
-          <path
-            d={pathGenerator(cellOutline(selectedCell))!}
-            fill="none"
-            stroke="red"
-            strokeWidth={3}
-            pointerEvents="none"
-          />
-        )}
-        <path d={gridPath} fill="none" stroke="green" strokeWidth={1} />
-        <path d={gridOutlinePath} fill="none" stroke="green" strokeWidth={1} />
-      </svg>
+        Play random levels
+      </button>
     </div>
   );
 }

@@ -104,12 +104,13 @@ const GRID_TRIES = 20;
 /**
  * A fair level: the country's best cell leads the next by the difficulty's
  * margin, the country touches a fitting number of cells, and the best cell
- * is in the frame.
+ * is in the frame. Countries named in `exclude` are not picked.
  */
 export function generateLevel(
   seed: number,
   difficulty: Difficulty,
   countries: Country[],
+  exclude: readonly string[] = [],
 ): Level {
   const random = mulberry32(seed);
   const pick = <T>(items: readonly T[]) =>
@@ -120,6 +121,7 @@ export function generateLevel(
   const pool = countries.filter(
     (c) =>
       !excludedContinents.includes(c.properties.continent) &&
+      !exclude.includes(c.properties.name) &&
       areaOf(c) >= rule.minKm2,
   );
 
