@@ -57,6 +57,34 @@ import { regions, type Extent } from "./lib/regions";
 
 const padding = 50;
 
+type Coords = number[] | Coords[];
+
+/** Every `step`th point of each line, for drawing while the map moves. */
+function thin(coords: Coords, step: number): Coords {
+  if (typeof coords[0] === "number") return coords;
+  const parts = coords as Coords[];
+  if (typeof parts[0][0] !== "number") return parts.map((c) => thin(c, step));
+  return parts.filter((_, i) => i % step === 0 || i === parts.length - 1);
+}
+
+const thinWorld = (
+  world: FeatureCollection,
+  step: number,
+): FeatureCollection => ({
+  ...world,
+  features: world.features.map((f) =>
+    "coordinates" in f.geometry
+      ? {
+          ...f,
+          geometry: {
+            ...f.geometry,
+            coordinates: thin(f.geometry.coordinates as Coords, step),
+          } as typeof f.geometry,
+        }
+      : f,
+  ),
+});
+
 // Narrow screens get a portrait map, so it fills the screen instead of
 // sitting in a thin landscape strip
 const narrowQuery = window.matchMedia("(max-width: 640px)");
@@ -253,7 +281,11 @@ function LevelMap({
   // Hit-testing uses the target, which has `invert`
   const { projection, height, frameClip } = target;
 
-  const { projection: shown, animating } = useViewTransition(target, frameClip);
+  const { projection: shown, animating } = useViewTransition(
+    target,
+    frameClip,
+    narrow ? 450 : 750,
+  );
 
   // A hovered cell belongs to the view it was found in, so it is dropped as
   // soon as the level or the projection changes
@@ -264,20 +296,32 @@ function LevelMap({
   const hoveredCell =
     onCellClick && hover?.projection === projection ? hover.cell : null;
 
+  // Redrawing the full coastline every frame is too slow for phones
+  const coarseWorld = useMemo(() => thinWorld(world, 6), [world]);
+
   const { pathGenerator, worldPath, countryPath, gridPath, gridOutlinePath } =
     useMemo(() => {
       const pathGenerator = geoPath(shown);
       return {
         pathGenerator,
-        worldPath: pathGenerator(world)!,
-        countryPath: pathGenerator(displayCountry)!,
+        worldPath: pathGenerator(animating ? coarseWorld : world)!,
+        countryPath: revealed ? pathGenerator(displayCountry)! : "",
         gridPath: pathGenerator(createGrid(grid, extent))!,
         gridOutlinePath: pathGenerator(createGridOutline(extent))!,
       };
-    }, [shown, displayCountry, grid, extent, world]);
+    }, [
+      shown,
+      animating,
+      revealed,
+      displayCountry,
+      grid,
+      extent,
+      world,
+      coarseWorld,
+    ]);
 
   const heatmap = useMemo(() => {
-    if (!revealed) return [];
+    if (!revealed || animating) return [];
     const best = countryCells.cells[0].share;
     return countryCells.cells.map(({ cell, share }) => {
       const outline = cellOutline(cell);
@@ -289,7 +333,7 @@ function LevelMap({
         label: share < 0.01 ? "<1%" : `${Math.round(share * 100)}%`,
       };
     });
-  }, [revealed, countryCells, pathGenerator]);
+  }, [revealed, animating, countryCells, pathGenerator]);
 
   /** The cell under the pointer, if the pointer is over the map. */
   const cellUnder = (e: MouseEvent<SVGSVGElement>): GridCell | null => {
@@ -730,7 +774,9 @@ function DailySummary({
             const points = pointsFor(round);
             return (
               <tr key={level.country}>
-                <td className="pr-2 capitalize sm:pr-4 opacity-60">{dailyRounds[i]}</td>
+                <td className="pr-2 capitalize sm:pr-4 opacity-60">
+                  {dailyRounds[i]}
+                </td>
                 <td className="pr-2 font-semibold sm:pr-4">{level.country}</td>
                 <td className="pr-2 sm:pr-4">
                   {round.found

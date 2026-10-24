@@ -71,6 +71,8 @@ export function projectionOf(view: View, clip: Extent): GeoProjection {
     .scale(view.scale)
     .translate(view.translate)
     .rotate(view.rotate)
+    // Coarser resampling: the blended raw projection is costly to evaluate
+    .precision(2)
     .clipExtent(clip);
 }
 
