@@ -16,7 +16,6 @@ import {
   cellKey,
   computeCountryCells,
   type CountryCells,
-  type RankedCellShare,
 } from "./lib/countryArea";
 import {
   MAX_POINTS,
@@ -58,49 +57,7 @@ const frameClip: Extent = [
   [width - padding + 1, height - padding + 1],
 ];
 
-const formatKm2 = (km2: number) =>
-  `${Math.round(km2).toLocaleString("en-US")} km²`;
 const formatPercent = (fraction: number) => `${(fraction * 100).toFixed(1)}%`;
-
-function CellInfo({
-  countryName,
-  cell,
-  share,
-  cellCount,
-  best,
-  totalKm2,
-}: {
-  countryName: string;
-  cell: GridCell | null;
-  share: RankedCellShare | undefined;
-  cellCount: number;
-  best: { share: number };
-  totalKm2: number;
-}) {
-  if (!cell) {
-    return (
-      <div className="h-12 text-sm opacity-60">
-        Click a cell to see how much of {countryName} lies in it (
-        {formatKm2(totalKm2)} in total).
-      </div>
-    );
-  }
-  return (
-    <div className="h-12 text-sm">
-      <div className="font-semibold">
-        {share
-          ? `${formatPercent(share.share)} of ${countryName} (${formatKm2(share.areaKm2)})`
-          : `No part of ${countryName}`}
-      </div>
-      {share && (
-        <div className="opacity-80">
-          Rank {share.rank} of {cellCount} ·{" "}
-          {formatPercent(share.share / best.share)} of the best cell
-        </div>
-      )}
-    </div>
-  );
-}
 
 interface MapData {
   /** Low-poly countries, used for calculations */
@@ -428,6 +385,69 @@ function initialSeed() {
   return Number.isInteger(param) && param > 0 ? param : randomSeed();
 }
 
+const emptyRound = (): RoundProgress => ({ tries: [], found: false });
+
+/** The round after clicking `cell`; unchanged if the click does not count. */
+function addTry(
+  round: RoundProgress,
+  cell: GridCell,
+  countryCells: CountryCells,
+): RoundProgress {
+  if (roundOver(round) || round.tries.some((t) => sameCell(t, cell))) {
+    return round;
+  }
+  return {
+    tries: [...round.tries, cell],
+    found: countryCells.byKey.get(cellKey(cell))?.rank === 1,
+  };
+}
+
+const roundStatus = (round: RoundProgress) =>
+  roundOver(round)
+    ? round.found
+      ? `Found on try ${round.tries.length}`
+      : "Not found"
+    : `Try ${round.tries.length + 1}/${TRIES_PER_ROUND}`;
+
+/** What each try told the player. */
+function TryList({
+  name,
+  round,
+  countryCells,
+}: {
+  name: string;
+  round: RoundProgress;
+  countryCells: CountryCells;
+}) {
+  const best = countryCells.cells[0];
+  return (
+    <ol className="h-16 text-sm">
+      {round.tries.length === 0 && (
+        <li className="opacity-60">
+          Click the cell that holds the biggest part of {name}.
+        </li>
+      )}
+      {round.tries.map((cell, i) => {
+        const share = countryCells.byKey.get(cellKey(cell));
+        return (
+          <li key={cellKey(cell)}>
+            {i + 1}.{" "}
+            {!share
+              ? `No part of ${name}`
+              : share.rank === 1
+                ? `Found it: ${formatPercent(share.share)} of ${name}`
+                : `Rank ${share.rank} of ${countryCells.cells.length} · ${formatPercent(share.share / best.share)} of the best cell`}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+// The found cell is outlined as the best one, not as a miss
+const misses = (round: RoundProgress) =>
+  round.found ? round.tries.slice(0, -1) : round.tries;
+
 function RandomGame(data: MapData) {
   const [difficulty, setDifficulty] = useState(initialDifficulty);
   const [seed, setSeed] = useState(initialSeed);
@@ -454,20 +474,16 @@ function RandomGame(data: MapData) {
     history.replaceState(null, "", `?${params}`);
   }, [seed, difficulty]);
 
-  const [selectedCell, setSelectedCell] = useState<GridCell | null>(null);
+  const [round, setRound] = useState(emptyRound);
+  // The country stays hidden until the player finds its cell or runs out of
+  // tries
+  const over = roundOver(round);
 
   // Clears what belonged to the previous level
   const startLevel = () => {
     setProjectionOverride(null);
-    setSelectedCell(null);
+    setRound(emptyRound());
   };
-
-  const selectedShare = selectedCell
-    ? countryCells.byKey.get(cellKey(selectedCell))
-    : undefined;
-
-  // The country stays hidden until the player picks the cell holding most of it
-  const found = selectedShare?.rank === 1;
 
   return (
     <>
@@ -500,6 +516,7 @@ function RandomGame(data: MapData) {
       </div>
       <div className="flex items-center gap-3">
         <span className="text-xl font-semibold">{country.properties.name}</span>
+        <span className="opacity-60">{roundStatus(round)}</span>
         <button
           type="button"
           className="rounded border px-2 py-0.5"
@@ -511,13 +528,10 @@ function RandomGame(data: MapData) {
           Next level
         </button>
       </div>
-      <CellInfo
-        countryName={country.properties.name}
-        cell={selectedCell}
-        share={selectedShare}
-        cellCount={countryCells.cells.length}
-        best={countryCells.cells[0]}
-        totalKm2={countryCells.totalKm2}
+      <TryList
+        name={country.properties.name}
+        round={round}
+        countryCells={countryCells}
       />
       <LevelMap
         level={level}
@@ -525,9 +539,13 @@ function RandomGame(data: MapData) {
         countryCells={countryCells}
         world={data.world}
         projectionName={projectionName}
-        marked={selectedCell ? [selectedCell] : []}
-        revealed={found}
-        onCellClick={setSelectedCell}
+        marked={misses(round)}
+        revealed={over}
+        onCellClick={
+          over
+            ? undefined
+            : (cell) => setRound((r) => addTry(r, cell, countryCells))
+        }
       />
     </>
   );
@@ -604,16 +622,6 @@ function DailyRound({
   );
   const name = country.properties.name;
   const over = roundOver(round);
-  const best = countryCells.cells[0];
-
-  const handleClick = (cell: GridCell) => {
-    if (over || round.tries.some((t) => sameCell(t, cell))) return;
-    const share = countryCells.byKey.get(cellKey(cell));
-    onRoundChange({
-      tries: [...round.tries, cell],
-      found: share?.rank === 1,
-    });
-  };
 
   const last = index === dailyRounds.length - 1;
   return (
@@ -638,35 +646,20 @@ function DailyRound({
           </button>
         )}
       </div>
-      <ol className="h-16 text-sm">
-        {round.tries.length === 0 && (
-          <li className="opacity-60">
-            Click the cell that holds the biggest part of {name}.
-          </li>
-        )}
-        {round.tries.map((cell, i) => {
-          const share = countryCells.byKey.get(cellKey(cell));
-          return (
-            <li key={cellKey(cell)}>
-              {i + 1}.{" "}
-              {!share
-                ? `No part of ${name}`
-                : share.rank === 1
-                  ? `Found it: ${formatPercent(share.share)} of ${name}`
-                  : `Rank ${share.rank} of ${countryCells.cells.length} · ${formatPercent(share.share / best.share)} of the best cell`}
-            </li>
-          );
-        })}
-      </ol>
+      <TryList name={name} round={round} countryCells={countryCells} />
       <LevelMap
         level={level}
         displayCountry={displayCountry}
         countryCells={countryCells}
         world={data.world}
         projectionName={level.projectionName}
-        marked={round.found ? round.tries.slice(0, -1) : round.tries}
+        marked={misses(round)}
         revealed={over}
-        onCellClick={over ? undefined : handleClick}
+        onCellClick={
+          over
+            ? undefined
+            : (cell) => onRoundChange(addTry(round, cell, countryCells))
+        }
       />
     </>
   );
