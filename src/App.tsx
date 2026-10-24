@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useState, type PointerEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+  type MouseEvent,
+  type PointerEvent,
+} from "react";
 import { geoPath, json } from "d3";
 import type { FeatureCollection } from "geojson";
 import { feature } from "topojson-client";
@@ -48,14 +55,17 @@ import {
 } from "./lib/projections";
 import { regions, type Extent } from "./lib/regions";
 
-const width = 1000;
-const height = 700;
 const padding = 50;
-// Region views are clipped to this frame, and so is every transition frame
-const frameClip: Extent = [
-  [padding - 1, padding - 1],
-  [width - padding + 1, height - padding + 1],
-];
+
+// Narrow screens get a portrait map, so it fills the screen instead of
+// sitting in a thin landscape strip
+const narrowQuery = window.matchMedia("(max-width: 640px)");
+const subscribeNarrow = (notify: () => void) => {
+  narrowQuery.addEventListener("change", notify);
+  return () => narrowQuery.removeEventListener("change", notify);
+};
+const useNarrow = () =>
+  useSyncExternalStore(subscribeNarrow, () => narrowQuery.matches);
 
 const formatPercent = (fraction: number) => `${(fraction * 100).toFixed(1)}%`;
 
@@ -126,7 +136,7 @@ function App() {
     return <div className="p-4 opacity-60">Loading map…</div>;
   }
   return (
-    <div className="flex h-screen flex-col items-center gap-2 p-4">
+    <div className="flex h-dvh flex-col items-center gap-2 p-2 sm:p-4">
       <div className="flex gap-1">
         {(["daily", "random"] as const).map((m) => (
           <button
@@ -191,16 +201,16 @@ function LevelMap({
   onCellClick?: (cell: GridCell) => void;
 }) {
   const { grid, regionName } = level;
+  const narrow = useNarrow();
+  const width = narrow ? 600 : 1000;
+  // Phones get a tight frame; the map is as wide as the screen
+  const pad = narrow ? 10 : padding;
   const extent = useMemo(
     () => snapExtent(regions[regionName].extent, grid),
     [regionName, grid],
   );
 
   const target = useMemo(() => {
-    const box: Extent = [
-      [padding, padding],
-      [width - padding, height - padding],
-    ];
     // Rotate the globe so the centre of the region is the centre of the map.
     // The world is centred on a grid line, so its edges are grid lines too
     // and no cell is split across the two sides of the map.
@@ -210,17 +220,38 @@ function LevelMap({
       ? [grid.offset[0], 0]
       : [(lon0 + lon1) / 2, (lat0 + lat1) / 2];
     const { create, raw } = projections[projectionName];
-    const projection = create()
-      .rotate([-centre[0], -centre[1]])
-      .fitExtent(box, createGridOutline(extent));
+    const outline = createGridOutline(extent);
+    const projection = create().rotate([-centre[0], -centre[1]]);
+    let height = 700;
+    if (narrow) {
+      // Fit the width, then cut the frame to the height the map takes
+      // fitWidth puts the top of the map at y = 0
+      projection.fitWidth(width - 2 * pad, outline);
+      const [tx, ty] = projection.translate();
+      projection.translate([tx + pad, ty + pad]);
+      height = Math.ceil(geoPath(projection).bounds(outline)[1][1] + pad);
+    } else {
+      projection.fitExtent(
+        [
+          [pad, pad],
+          [width - pad, height - pad],
+        ],
+        outline,
+      );
+    }
+    // Region views are clipped to this frame, and so is every transition frame
+    const frameClip: Extent = [
+      [pad - 1, pad - 1],
+      [width - pad + 1, height - pad + 1],
+    ];
     // Keep coastlines and countries inside the region's frame
     if (!world) {
       projection.clipExtent(frameClip);
     }
-    return { projection, view: viewOf(raw, projection) };
-  }, [projectionName, extent, grid]);
+    return { projection, view: viewOf(raw, projection), height, frameClip };
+  }, [projectionName, extent, grid, width, narrow, pad]);
   // Hit-testing uses the target, which has `invert`
-  const { projection } = target;
+  const { projection, height, frameClip } = target;
 
   const { projection: shown, animating } = useViewTransition(target, frameClip);
 
@@ -260,12 +291,12 @@ function LevelMap({
     });
   }, [revealed, countryCells, pathGenerator]);
 
-  const handlePointerMove = (e: PointerEvent<SVGSVGElement>) => {
+  /** The cell under the pointer, if the pointer is over the map. */
+  const cellUnder = (e: MouseEvent<SVGSVGElement>): GridCell | null => {
     // The map is moving and cells are not where `projection` puts them
-    if (animating || !onCellClick) return;
-    const svg = e.currentTarget;
-    const inverse = svg.getScreenCTM()?.inverse();
-    if (!inverse) return;
+    if (animating || !onCellClick) return null;
+    const inverse = e.currentTarget.getScreenCTM()?.inverse();
+    if (!inverse) return null;
     // Pointer position in SVG (viewBox) coordinates
     const { x, y } = new DOMPoint(e.clientX, e.clientY).matrixTransform(
       inverse,
@@ -275,31 +306,40 @@ function LevelMap({
     // something that does not project back to where the pointer is.
     const back = lonLat && projection(lonLat);
     if (!lonLat || !back || Math.hypot(back[0] - x, back[1] - y) > 0.5) {
-      setHover(null);
-      return;
+      return null;
     }
     const [[lon0, lat0], [lon1, lat1]] = extent;
     // The frame can run past 180°, where `invert` gives negative longitudes
     const lon = lonLat[0] < lon0 ? lonLat[0] + 360 : lonLat[0];
-    if (lon >= lon1 || lonLat[1] < lat0 || lonLat[1] >= lat1) {
-      setHover(null);
-      return;
-    }
-    const cell = cellAt(lonLat, grid);
+    if (lon >= lon1 || lonLat[1] < lat0 || lonLat[1] >= lat1) return null;
+    return cellAt(lonLat, grid);
+  };
+
+  const handlePointerMove = (e: PointerEvent<SVGSVGElement>) => {
+    // Touch has no hover; a tap picks its cell on click
+    if (e.pointerType === "touch") return;
+    const cell = cellUnder(e);
     setHover((prev) =>
-      prev && prev.projection === projection && sameCell(prev.cell, cell)
-        ? prev
-        : { cell, projection },
+      !cell
+        ? null
+        : prev && prev.projection === projection && sameCell(prev.cell, cell)
+          ? prev
+          : { cell, projection },
     );
+  };
+
+  const handleClick = (e: MouseEvent<SVGSVGElement>) => {
+    const cell = cellUnder(e);
+    if (cell) onCellClick?.(cell);
   };
 
   return (
     <svg
-      className="min-h-0 w-full flex-1"
+      className="min-h-0 w-full flex-1 touch-manipulation select-none"
       viewBox={`0 0 ${width} ${height}`}
       onPointerMove={handlePointerMove}
       onPointerLeave={() => setHover(null)}
-      onClick={() => !animating && hoveredCell && onCellClick?.(hoveredCell)}
+      onClick={handleClick}
     >
       <path d={worldPath} fill="none" stroke="currentColor" strokeWidth={0.6} />
       {heatmap.map(({ key, path, weight }) => (
@@ -349,7 +389,7 @@ function LevelMap({
         />
       )}
       <g
-        fontSize={14}
+        fontSize={narrow ? 20 : 14}
         fontWeight={600}
         fill="currentColor"
         stroke="var(--bg)"
@@ -421,7 +461,7 @@ function TryList({
 }) {
   const best = countryCells.cells[0];
   return (
-    <ol className="h-16 text-sm">
+    <ol className="h-16 w-full max-w-xl overflow-y-auto px-1 text-center text-sm">
       {round.tries.length === 0 && (
         <li className="opacity-60">
           Click the cell that holds the biggest part of {name}.
@@ -487,7 +527,7 @@ function RandomGame(data: MapData) {
 
   return (
     <>
-      <div className="flex gap-2">
+      <div className="flex flex-wrap justify-center gap-2">
         <select
           value={difficulty}
           onChange={(e) => {
@@ -514,7 +554,7 @@ function RandomGame(data: MapData) {
           ))}
         </select>
       </div>
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
         <span className="text-xl font-semibold">{country.properties.name}</span>
         <span className="opacity-60">{roundStatus(round)}</span>
         <button
@@ -626,7 +666,7 @@ function DailyRound({
   const last = index === dailyRounds.length - 1;
   return (
     <>
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
         <span className="opacity-60">
           {title} · Round {index + 1}/{dailyRounds.length}
         </span>
@@ -678,21 +718,21 @@ function DailySummary({
 }) {
   const total = progress.rounds.reduce((sum, r) => sum + pointsFor(r), 0);
   return (
-    <div className="flex flex-col items-center gap-3 pt-8">
+    <div className="flex flex-col items-center gap-3 overflow-y-auto pt-4 sm:pt-8">
       <div className="opacity-60">{title}</div>
       <div className="text-3xl font-semibold">
         {total} / {MAX_POINTS}
       </div>
-      <table className="text-sm">
+      <table className="max-w-full text-xs sm:text-sm">
         <tbody>
           {levels.map((level, i) => {
             const round = progress.rounds[i];
             const points = pointsFor(round);
             return (
               <tr key={level.country}>
-                <td className="pr-4 capitalize opacity-60">{dailyRounds[i]}</td>
-                <td className="pr-4 font-semibold">{level.country}</td>
-                <td className="pr-4">
+                <td className="pr-2 capitalize sm:pr-4 opacity-60">{dailyRounds[i]}</td>
+                <td className="pr-2 font-semibold sm:pr-4">{level.country}</td>
+                <td className="pr-2 sm:pr-4">
                   {round.found
                     ? `found on try ${round.tries.length}`
                     : "not found"}
