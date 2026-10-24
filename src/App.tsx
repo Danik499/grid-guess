@@ -41,16 +41,6 @@ const frameClip: Extent = [
   [width - padding + 1, height - padding + 1],
 ];
 
-/** Longitude in [-180, 180). */
-const normalizeLon = (lon: number) => ((((lon + 180) % 360) + 360) % 360) - 180;
-
-const formatLon = (lon: number) => {
-  const l = normalizeLon(lon);
-  return `${Math.abs(l)}°${l < 0 ? "W" : l > 0 && l < 180 ? "E" : ""}`;
-};
-const formatLat = (lat: number) =>
-  `${Math.abs(lat)}°${lat < 0 ? "S" : lat > 0 ? "N" : ""}`;
-
 const formatKm2 = (km2: number) =>
   `${Math.round(km2).toLocaleString("en-US")} km²`;
 const formatPercent = (fraction: number) => `${(fraction * 100).toFixed(1)}%`;
@@ -78,20 +68,17 @@ function CellInfo({
       </div>
     );
   }
-  const where = `${formatLon(cell.lon0)}–${formatLon(cell.lon1)}, ${formatLat(cell.lat0)}–${formatLat(cell.lat1)}`;
   return (
     <div className="h-12 text-sm">
       <div className="font-semibold">
-        {where}:{" "}
         {share
           ? `${formatPercent(share.share)} of ${countryName} (${formatKm2(share.areaKm2)})`
-          : `no part of ${countryName}`}
+          : `No part of ${countryName}`}
       </div>
       {share && (
         <div className="opacity-80">
-          Covers {formatPercent(share.coverage)} of the cell · rank {share.rank}{" "}
-          of {cellCount} · {formatPercent(share.share / best.share)} of the best
-          cell
+          Rank {share.rank} of {cellCount} ·{" "}
+          {formatPercent(share.share / best.share)} of the best cell
         </div>
       )}
     </div>
