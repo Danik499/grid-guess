@@ -22,7 +22,7 @@ export function DailySummary({
   return (
     <div className="flex flex-col items-center gap-3 overflow-y-auto pt-4 sm:pt-8">
       <div className="opacity-60">{title}</div>
-      <div className="text-3xl font-semibold">
+      <div className="font-display text-4xl">
         {total} / {MAX_POINTS}
       </div>
       <table className="max-w-full text-xs sm:text-sm">

@@ -42,7 +42,7 @@ export function DailyRound({
         <span className="opacity-60">
           {title} · Round {index + 1}/{dailyRounds.length}
         </span>
-        <span className="text-xl font-semibold">{name}</span>
+        <span className="font-display text-3xl">{name}</span>
         <span className="opacity-60">
           {over ? pointsLabel(pointsFor(round)) : roundStatus(round)}
         </span>

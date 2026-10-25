@@ -82,7 +82,7 @@ export function RandomGame(data: MapData) {
         </select>
       </div>
       <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
-        <span className="text-xl font-semibold">{country.properties.name}</span>
+        <span className="font-display text-3xl">{country.properties.name}</span>
         <span className="opacity-60">{roundStatus(round)}</span>
         <button
           type="button"

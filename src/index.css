@@ -1,12 +1,18 @@
 @import "tailwindcss";
 
+@theme {
+  /* Old-atlas type: engraved display faces over a book serif body */
+  --font-display: "IM Fell English", Georgia, serif;
+  --font-caps: "IM Fell English SC", Georgia, serif;
+  --font-sans: "EB Garamond", Georgia, "Times New Roman", serif;
+}
+
 :root {
   --text: #6b6375;
   --bg: #fff;
-  --sans: system-ui, "Segoe UI", Roboto, sans-serif;
+  --sans: "EB Garamond", Georgia, "Times New Roman", serif;
 
-  font: 18px/145% var(--sans);
-  letter-spacing: 0.18px;
+  font: 20px/140% var(--sans);
   color-scheme: light dark;
   color: var(--text);
   background: var(--bg);
@@ -16,6 +22,6 @@
   -moz-osx-font-smoothing: grayscale;
 
   @media (max-width: 1024px) {
-    font-size: 16px;
+    font-size: 18px;
   }
 }
