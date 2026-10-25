@@ -105,6 +105,8 @@ export function RandomGame(data: MapData) {
         displayCountry={displayCountry}
         countryCells={countryCells}
         world={data.world}
+        countries={data.countries}
+        displayCountries={data.displayCountries}
         projectionName={projectionName}
         marked={misses(round)}
         revealed={over}

@@ -46,12 +46,10 @@ export function DailySummary({
           })}
         </tbody>
       </table>
-      <div className="text-ink-soft">Come back tomorrow for a new challenge.</div>
-      <button
-        type="button"
-        className="btn"
-        onClick={onPlayRandom}
-      >
+      <div className="text-ink-soft">
+        Come back tomorrow for a new challenge.
+      </div>
+      <button type="button" className="btn" onClick={onPlayRandom}>
         Play random levels
       </button>
     </div>

@@ -47,11 +47,7 @@ export function DailyRound({
           {over ? pointsLabel(pointsFor(round)) : roundStatus(round)}
         </span>
         {over && (
-          <button
-            type="button"
-            className="btn"
-            onClick={onNext}
-          >
+          <button type="button" className="btn" onClick={onNext}>
             {last ? "See results" : "Next round"}
           </button>
         )}
@@ -62,6 +58,8 @@ export function DailyRound({
         displayCountry={displayCountry}
         countryCells={countryCells}
         world={data.world}
+        countries={data.countries}
+        displayCountries={data.displayCountries}
         projectionName={level.projectionName}
         marked={misses(round)}
         revealed={over}

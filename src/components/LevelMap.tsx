@@ -1,4 +1,10 @@
-import { useMemo, useState, type MouseEvent, type PointerEvent } from "react";
+import {
+  useId,
+  useMemo,
+  useState,
+  type MouseEvent,
+  type PointerEvent,
+} from "react";
 import { geoPath, type GeoProjection } from "d3";
 import type { FeatureCollection } from "geojson";
 import { useMapProjection } from "../hooks/useMapProjection";
@@ -22,6 +28,8 @@ export function LevelMap({
   displayCountry,
   countryCells,
   world,
+  countries,
+  displayCountries,
   projectionName,
   marked,
   revealed,
@@ -31,6 +39,10 @@ export function LevelMap({
   displayCountry: Country;
   countryCells: CountryCells;
   world: FeatureCollection;
+  /** Low-poly land, drawn while the map moves. */
+  countries: Country[];
+  /** Detailed land, drawn when the map is at rest. */
+  displayCountries: Map<string, Country>;
   projectionName: ProjectionName;
   /** Cells the player picked, outlined in rust. */
   marked: GridCell[];
@@ -66,27 +78,53 @@ export function LevelMap({
 
   // Redrawing the full coastline every frame is too slow for phones
   const coarseWorld = useMemo(() => thinWorld(world, 6), [world]);
+  const coarseLand = useMemo<FeatureCollection>(
+    () => ({ type: "FeatureCollection", features: countries }),
+    [countries],
+  );
+  const detailedLand = useMemo<FeatureCollection>(
+    () => ({
+      type: "FeatureCollection",
+      features: [...displayCountries.values()],
+    }),
+    [displayCountries],
+  );
 
-  const { pathGenerator, worldPath, countryPath, gridPath, gridOutlinePath } =
-    useMemo(() => {
-      const pathGenerator = geoPath(shown);
-      return {
-        pathGenerator,
-        worldPath: pathGenerator(animating ? coarseWorld : world)!,
-        countryPath: revealed ? pathGenerator(displayCountry)! : "",
-        gridPath: pathGenerator(createGrid(grid, extent))!,
-        gridOutlinePath: pathGenerator(createGridOutline(extent))!,
-      };
-    }, [
-      shown,
-      animating,
-      revealed,
-      displayCountry,
-      grid,
-      extent,
-      world,
-      coarseWorld,
-    ]);
+  // Ids for the <defs> below; several maps may be on the page at once
+  const uid = useId();
+  const clipId = `${uid}-grid`;
+  const hatchWrongId = `${uid}-hatch-wrong`;
+  const hatchCorrectId = `${uid}-hatch-correct`;
+
+  const {
+    pathGenerator,
+    worldPath,
+    landPath,
+    countryPath,
+    gridPath,
+    gridOutlinePath,
+  } = useMemo(() => {
+    const pathGenerator = geoPath(shown);
+    return {
+      pathGenerator,
+      landPath: pathGenerator(animating ? coarseLand : detailedLand)!,
+      worldPath: pathGenerator(animating ? coarseWorld : world)!,
+      countryPath: revealed ? pathGenerator(displayCountry)! : "",
+      gridPath: pathGenerator(createGrid(grid, extent))!,
+      gridOutlinePath: pathGenerator(createGridOutline(extent))!,
+    };
+  }, [
+    shown,
+    animating,
+    revealed,
+    displayCountry,
+    grid,
+    extent,
+    world,
+    coarseWorld,
+    coarseLand,
+    detailedLand,
+  ]);
 
   const heatmap = useMemo(() => {
     if (!revealed || animating) return [];
@@ -142,12 +180,74 @@ export function LevelMap({
       onPointerLeave={() => setHover(null)}
       onClick={handleClick}
     >
-      <path
-        d={worldPath}
-        fill="none"
-        stroke="var(--color-ink)"
-        strokeWidth={0.7}
-      />
+      <defs>
+        <clipPath id={clipId}>
+          <path d={gridOutlinePath} />
+        </clipPath>
+        <pattern
+          id={hatchWrongId}
+          width={8}
+          height={8}
+          patternUnits="userSpaceOnUse"
+          patternTransform="rotate(45)"
+        >
+          <rect width={8} height={8} fill="var(--color-wrong)" opacity={0.1} />
+          <line
+            y2={8}
+            stroke="var(--color-wrong)"
+            strokeWidth={2}
+            opacity={0.45}
+          />
+        </pattern>
+        <pattern
+          id={hatchCorrectId}
+          width={8}
+          height={8}
+          patternUnits="userSpaceOnUse"
+          patternTransform="rotate(-45)"
+        >
+          <rect
+            width={8}
+            height={8}
+            fill="var(--color-correct)"
+            opacity={0.14}
+          />
+          <line
+            y2={8}
+            stroke="var(--color-correct)"
+            strokeWidth={2}
+            opacity={0.5}
+          />
+        </pattern>
+      </defs>
+      <path d={gridOutlinePath} fill="var(--color-sea)" pointerEvents="none" />
+      <g clipPath={`url(#${clipId})`} pointerEvents="none">
+        <path
+          d={landPath}
+          fill="var(--color-land)"
+          // Same-color stroke closes the hairline seams between countries, so
+          // no borders show; the coastline below is the only line on land
+          stroke="var(--color-land)"
+          strokeWidth={1}
+          strokeLinejoin="round"
+        />
+        {/* Shoreline: a pale halo under the ink coastline */}
+        <path
+          d={worldPath}
+          fill="none"
+          stroke="var(--color-paper)"
+          strokeOpacity={0.7}
+          strokeWidth={4}
+          strokeLinejoin="round"
+        />
+        <path
+          d={worldPath}
+          fill="none"
+          stroke="var(--color-ink)"
+          strokeWidth={0.8}
+          strokeLinejoin="round"
+        />
+      </g>
       {heatmap.map(({ key, path, weight }) => (
         <path
           key={key}
@@ -173,13 +273,24 @@ export function LevelMap({
           pointerEvents="none"
         />
       )}
-      <path d={gridPath} fill="none" stroke="var(--color-grid)" strokeOpacity={0.75} strokeWidth={1} />
-      <path d={gridOutlinePath} fill="none" stroke="var(--color-ink)" strokeWidth={1.5} />
+      <path
+        d={gridPath}
+        fill="none"
+        stroke="var(--color-grid)"
+        strokeOpacity={0.75}
+        strokeWidth={1}
+      />
+      <path
+        d={gridOutlinePath}
+        fill="none"
+        stroke="var(--color-ink)"
+        strokeWidth={1.5}
+      />
       {marked.map((cell) => (
         <path
           key={cellKey(cell)}
           d={pathGenerator(cellOutline(cell))!}
-          fill="none"
+          fill={`url(#${hatchWrongId})`}
           stroke="var(--color-wrong)"
           strokeWidth={3}
           pointerEvents="none"
@@ -188,7 +299,7 @@ export function LevelMap({
       {revealed && (
         <path
           d={pathGenerator(cellOutline(countryCells.cells[0].cell))!}
-          fill="none"
+          fill={`url(#${hatchCorrectId})`}
           stroke="var(--color-correct)"
           strokeWidth={4}
           pointerEvents="none"
