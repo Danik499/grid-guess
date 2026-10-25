@@ -32,7 +32,7 @@ export function LevelMap({
   countryCells: CountryCells;
   world: FeatureCollection;
   projectionName: ProjectionName;
-  /** Cells the player picked, outlined in red. */
+  /** Cells the player picked, outlined in rust. */
   marked: GridCell[];
   /** Shows the country and how it splits over the cells. */
   revealed: boolean;
@@ -142,12 +142,17 @@ export function LevelMap({
       onPointerLeave={() => setHover(null)}
       onClick={handleClick}
     >
-      <path d={worldPath} fill="none" stroke="currentColor" strokeWidth={0.6} />
+      <path
+        d={worldPath}
+        fill="none"
+        stroke="var(--color-ink)"
+        strokeWidth={0.7}
+      />
       {heatmap.map(({ key, path, weight }) => (
         <path
           key={key}
           d={path}
-          fill="steelblue"
+          fill="var(--color-heat)"
           fillOpacity={0.15 + 0.45 * weight}
           pointerEvents="none"
         />
@@ -155,27 +160,27 @@ export function LevelMap({
       {revealed && (
         <path
           d={countryPath}
-          fill="orange"
-          fillOpacity={0.8}
+          fill="var(--color-correct)"
+          fillOpacity={0.5}
           stroke="currentColor"
         />
       )}
       {hoveredCell && (
         <path
           d={pathGenerator(cellOutline(hoveredCell))!}
-          fill="green"
-          fillOpacity={0.3}
+          fill="var(--color-ink)"
+          fillOpacity={0.12}
           pointerEvents="none"
         />
       )}
-      <path d={gridPath} fill="none" stroke="green" strokeWidth={1} />
-      <path d={gridOutlinePath} fill="none" stroke="green" strokeWidth={1} />
+      <path d={gridPath} fill="none" stroke="var(--color-grid)" strokeOpacity={0.75} strokeWidth={1} />
+      <path d={gridOutlinePath} fill="none" stroke="var(--color-ink)" strokeWidth={1.5} />
       {marked.map((cell) => (
         <path
           key={cellKey(cell)}
           d={pathGenerator(cellOutline(cell))!}
           fill="none"
-          stroke="red"
+          stroke="var(--color-wrong)"
           strokeWidth={3}
           pointerEvents="none"
         />
@@ -184,7 +189,7 @@ export function LevelMap({
         <path
           d={pathGenerator(cellOutline(countryCells.cells[0].cell))!}
           fill="none"
-          stroke="limegreen"
+          stroke="var(--color-correct)"
           strokeWidth={4}
           pointerEvents="none"
         />

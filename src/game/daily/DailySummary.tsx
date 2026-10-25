@@ -21,7 +21,7 @@ export function DailySummary({
   const total = progress.rounds.reduce((sum, r) => sum + pointsFor(r), 0);
   return (
     <div className="flex flex-col items-center gap-3 overflow-y-auto pt-4 sm:pt-8">
-      <div className="opacity-60">{title}</div>
+      <div className="text-ink-soft">{title}</div>
       <div className="font-display text-4xl">
         {total} / {MAX_POINTS}
       </div>
@@ -46,10 +46,10 @@ export function DailySummary({
           })}
         </tbody>
       </table>
-      <div className="opacity-60">Come back tomorrow for a new challenge.</div>
+      <div className="text-ink-soft">Come back tomorrow for a new challenge.</div>
       <button
         type="button"
-        className="rounded border px-3 py-1"
+        className="btn"
         onClick={onPlayRandom}
       >
         Play random levels

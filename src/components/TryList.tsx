@@ -16,7 +16,7 @@ export function TryList({
   return (
     <ol className="h-16 w-full max-w-xl overflow-y-auto px-1 text-center text-sm">
       {round.tries.length === 0 && (
-        <li className="opacity-60">
+        <li className="text-ink-soft">
           Click the cell that holds the biggest part of {name}.
         </li>
       )}

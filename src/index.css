@@ -1,6 +1,19 @@
 @import "tailwindcss";
 
-@theme {
+@theme static {
+  /* Old-atlas palette, named by role. Also used by the map SVG as var(--color-*) */
+  --color-paper: #f1e6cf;
+  --color-paper-raised: #f6eedc;
+  --color-ink: #3b2a18;
+  --color-ink-soft: #6b5236;
+  --color-rule: #b89b70;
+  --color-sea: #d9dfcf;
+  --color-land: #e6d3a8;
+  --color-grid: #9a3b26;
+  --color-wrong: #b5542c;
+  --color-correct: #2f5d62;
+  --color-heat: #b8893a;
+
   /* Old-atlas type: engraved display faces over a book serif body */
   --font-display: "IM Fell English", Georgia, serif;
   --font-caps: "IM Fell English SC", Georgia, serif;
@@ -8,12 +21,12 @@
 }
 
 :root {
-  --text: #6b6375;
-  --bg: #fff;
+  --text: var(--color-ink);
+  --bg: var(--color-paper);
   --sans: "EB Garamond", Georgia, "Times New Roman", serif;
 
   font: 20px/140% var(--sans);
-  color-scheme: light dark;
+  color-scheme: light;
   color: var(--text);
   background: var(--bg);
   font-synthesis: none;
@@ -23,5 +36,39 @@
 
   @media (max-width: 1024px) {
     font-size: 18px;
+  }
+}
+
+@layer components {
+  .btn {
+    border: 1.5px solid var(--color-ink);
+    border-radius: 2px;
+    padding: 0.1rem 0.9rem;
+    font-family: var(--font-caps);
+    letter-spacing: 0.03em;
+    cursor: pointer;
+    &:hover {
+      background: var(--color-paper-raised);
+    }
+    &:focus-visible {
+      outline: 2px solid var(--color-grid);
+      outline-offset: 2px;
+    }
+  }
+  .btn-active {
+    background: var(--color-ink);
+    color: var(--color-paper);
+    &:hover {
+      background: var(--color-ink);
+    }
+  }
+}
+
+@layer base {
+  select {
+    border: 1.5px solid var(--color-ink);
+    border-radius: 2px;
+    background: var(--color-paper-raised);
+    padding: 0.1rem 0.4rem;
   }
 }
