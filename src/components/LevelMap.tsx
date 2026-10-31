@@ -1,6 +1,7 @@
 import {
   useId,
   useMemo,
+  useRef,
   useState,
   type MouseEvent,
   type PointerEvent,
@@ -8,6 +9,7 @@ import {
 import { geoPath, type GeoProjection } from "d3";
 import type { FeatureCollection } from "geojson";
 import { useMapProjection } from "../hooks/useMapProjection";
+import { useCoarsePointer } from "../hooks/useCoarsePointer";
 import { useNarrow } from "../hooks/useNarrow";
 import { cellKey, type CountryCells } from "../lib/countryArea";
 import {
@@ -75,6 +77,21 @@ export function LevelMap({
   } | null>(null);
   const hoveredCell =
     onCellClick && hover?.projection === projection ? hover.cell : null;
+
+  // A tap only selects its cell, since a finger hides what it lands on; the
+  // Confirm button below the map makes it a try. Dropped like `hover`.
+  const [selection, setSelection] = useState<{
+    cell: GridCell;
+    projection: GeoProjection;
+  } | null>(null);
+  const selectedCell =
+    onCellClick && selection?.projection === projection ? selection.cell : null;
+  // The Confirm row is there from the start on touch devices, and otherwise
+  // from the first tap, so the map does not jump each time a cell is selected
+  const coarse = useCoarsePointer();
+  const [touched, setTouched] = useState(false);
+  // `click` does not say reliably what made it, so the pointer down does
+  const pointerType = useRef("mouse");
 
   // Redrawing the full coastline every frame is too slow for phones
   const coarseWorld = useMemo(() => thinWorld(world, 6), [world]);
@@ -167,165 +184,220 @@ export function LevelMap({
     );
   };
 
+  const confirm = (cell: GridCell) => {
+    setSelection(null);
+    onCellClick?.(cell);
+  };
+
   const handleClick = (e: MouseEvent<SVGSVGElement>) => {
     const cell = cellUnder(e);
-    if (cell) onCellClick?.(cell);
+    if (pointerType.current !== "touch") {
+      if (cell) onCellClick?.(cell);
+      return;
+    }
+    setTouched(true);
+    if (!cell || marked.some((m) => sameCell(m, cell))) {
+      setSelection(null);
+    } else {
+      setSelection({ cell, projection });
+    }
   };
 
   return (
-    <svg
-      className="min-h-0 w-full flex-1 touch-manipulation select-none"
-      viewBox={`0 0 ${width} ${height}`}
-      onPointerMove={handlePointerMove}
-      onPointerLeave={() => setHover(null)}
-      onClick={handleClick}
-    >
-      <defs>
-        <clipPath id={clipId}>
-          <path d={gridOutlinePath} />
-        </clipPath>
-        <pattern
-          id={hatchWrongId}
-          width={8}
-          height={8}
-          patternUnits="userSpaceOnUse"
-          patternTransform="rotate(45)"
-        >
-          <rect width={8} height={8} fill="var(--color-wrong)" opacity={0.1} />
-          <line
-            y2={8}
-            stroke="var(--color-wrong)"
-            strokeWidth={2}
-            opacity={0.45}
-          />
-        </pattern>
-        <pattern
-          id={hatchCorrectId}
-          width={8}
-          height={8}
-          patternUnits="userSpaceOnUse"
-          patternTransform="rotate(-45)"
-        >
-          <rect
+    <>
+      <svg
+        className="min-h-0 w-full flex-1 touch-manipulation select-none"
+        viewBox={`0 0 ${width} ${height}`}
+        onPointerDown={(e) => (pointerType.current = e.pointerType)}
+        onPointerMove={handlePointerMove}
+        onPointerLeave={() => setHover(null)}
+        onClick={handleClick}
+      >
+        <defs>
+          <clipPath id={clipId}>
+            <path d={gridOutlinePath} />
+          </clipPath>
+          <pattern
+            id={hatchWrongId}
             width={8}
             height={8}
+            patternUnits="userSpaceOnUse"
+            patternTransform="rotate(45)"
+          >
+            <rect
+              width={8}
+              height={8}
+              fill="var(--color-wrong)"
+              opacity={0.1}
+            />
+            <line
+              y2={8}
+              stroke="var(--color-wrong)"
+              strokeWidth={2}
+              opacity={0.45}
+            />
+          </pattern>
+          <pattern
+            id={hatchCorrectId}
+            width={8}
+            height={8}
+            patternUnits="userSpaceOnUse"
+            patternTransform="rotate(-45)"
+          >
+            <rect
+              width={8}
+              height={8}
+              fill="var(--color-correct)"
+              opacity={0.14}
+            />
+            <line
+              y2={8}
+              stroke="var(--color-correct)"
+              strokeWidth={2}
+              opacity={0.5}
+            />
+          </pattern>
+        </defs>
+        <path
+          d={gridOutlinePath}
+          fill="var(--color-sea)"
+          pointerEvents="none"
+        />
+        <g clipPath={`url(#${clipId})`} pointerEvents="none">
+          <path
+            d={landPath}
+            fill="var(--color-land)"
+            // Same-color stroke closes the hairline seams between countries, so
+            // no borders show; the coastline below is the only line on land
+            stroke="var(--color-land)"
+            strokeWidth={1}
+            strokeLinejoin="round"
+          />
+          {/* Shoreline: a pale halo under the ink coastline */}
+          <path
+            d={worldPath}
+            fill="none"
+            stroke="var(--color-paper)"
+            strokeOpacity={0.7}
+            strokeWidth={4}
+            strokeLinejoin="round"
+          />
+          <path
+            d={worldPath}
+            fill="none"
+            stroke="var(--color-ink)"
+            strokeWidth={0.8}
+            strokeLinejoin="round"
+          />
+        </g>
+        {heatmap.map(({ key, path, weight }) => (
+          <path
+            key={key}
+            d={path}
+            fill="var(--color-heat)"
+            fillOpacity={0.15 + 0.45 * weight}
+            pointerEvents="none"
+          />
+        ))}
+        {revealed && (
+          <path
+            d={countryPath}
             fill="var(--color-correct)"
-            opacity={0.14}
+            fillOpacity={0.5}
+            stroke="currentColor"
           />
-          <line
-            y2={8}
-            stroke="var(--color-correct)"
-            strokeWidth={2}
-            opacity={0.5}
+        )}
+        {hoveredCell && (
+          <path
+            d={pathGenerator(cellOutline(hoveredCell))!}
+            fill="var(--color-ink)"
+            fillOpacity={0.12}
+            pointerEvents="none"
           />
-        </pattern>
-      </defs>
-      <path d={gridOutlinePath} fill="var(--color-sea)" pointerEvents="none" />
-      <g clipPath={`url(#${clipId})`} pointerEvents="none">
+        )}
+        {selectedCell && (
+          <path
+            d={pathGenerator(cellOutline(selectedCell))!}
+            fill="var(--color-ink)"
+            fillOpacity={0.22}
+            pointerEvents="none"
+          />
+        )}
         <path
-          d={landPath}
-          fill="var(--color-land)"
-          // Same-color stroke closes the hairline seams between countries, so
-          // no borders show; the coastline below is the only line on land
-          stroke="var(--color-land)"
-          strokeWidth={1}
-          strokeLinejoin="round"
-        />
-        {/* Shoreline: a pale halo under the ink coastline */}
-        <path
-          d={worldPath}
+          d={gridPath}
           fill="none"
-          stroke="var(--color-paper)"
-          strokeOpacity={0.7}
-          strokeWidth={4}
-          strokeLinejoin="round"
+          stroke="var(--color-grid)"
+          strokeOpacity={0.75}
+          strokeWidth={1}
         />
         <path
-          d={worldPath}
+          d={gridOutlinePath}
           fill="none"
           stroke="var(--color-ink)"
-          strokeWidth={0.8}
-          strokeLinejoin="round"
+          strokeWidth={1.5}
         />
-      </g>
-      {heatmap.map(({ key, path, weight }) => (
-        <path
-          key={key}
-          d={path}
-          fill="var(--color-heat)"
-          fillOpacity={0.15 + 0.45 * weight}
-          pointerEvents="none"
-        />
-      ))}
-      {revealed && (
-        <path
-          d={countryPath}
-          fill="var(--color-correct)"
-          fillOpacity={0.5}
-          stroke="currentColor"
-        />
-      )}
-      {hoveredCell && (
-        <path
-          d={pathGenerator(cellOutline(hoveredCell))!}
-          fill="var(--color-ink)"
-          fillOpacity={0.12}
-          pointerEvents="none"
-        />
-      )}
-      <path
-        d={gridPath}
-        fill="none"
-        stroke="var(--color-grid)"
-        strokeOpacity={0.75}
-        strokeWidth={1}
-      />
-      <path
-        d={gridOutlinePath}
-        fill="none"
-        stroke="var(--color-ink)"
-        strokeWidth={1.5}
-      />
-      {marked.map((cell) => (
-        <path
-          key={cellKey(cell)}
-          d={pathGenerator(cellOutline(cell))!}
-          fill={`url(#${hatchWrongId})`}
-          stroke="var(--color-wrong)"
-          strokeWidth={3}
-          pointerEvents="none"
-        />
-      ))}
-      {revealed && (
-        <path
-          d={pathGenerator(cellOutline(countryCells.cells[0].cell))!}
-          fill={`url(#${hatchCorrectId})`}
-          stroke="var(--color-correct)"
-          strokeWidth={4}
-          pointerEvents="none"
-        />
-      )}
-      <g
-        fontSize={narrow ? 20 : 14}
-        fontWeight={600}
-        fill="currentColor"
-        stroke="var(--bg)"
-        strokeWidth={3}
-        paintOrder="stroke"
-        textAnchor="middle"
-        dominantBaseline="middle"
-        pointerEvents="none"
-        className={`transition-opacity duration-200 ${animating ? "opacity-0" : ""}`}
-      >
-        {heatmap.map(
-          ({ key, centre: [x, y], label }) =>
-            Number.isFinite(x) && (
-              <text key={key} x={x} y={y}>
-                {label}
-              </text>
-            ),
+        {marked.map((cell) => (
+          <path
+            key={cellKey(cell)}
+            d={pathGenerator(cellOutline(cell))!}
+            fill={`url(#${hatchWrongId})`}
+            stroke="var(--color-wrong)"
+            strokeWidth={3}
+            pointerEvents="none"
+          />
+        ))}
+        {revealed && (
+          <path
+            d={pathGenerator(cellOutline(countryCells.cells[0].cell))!}
+            fill={`url(#${hatchCorrectId})`}
+            stroke="var(--color-correct)"
+            strokeWidth={4}
+            pointerEvents="none"
+          />
         )}
-      </g>
-    </svg>
+        {selectedCell && (
+          <path
+            d={pathGenerator(cellOutline(selectedCell))!}
+            fill="none"
+            stroke="var(--color-ink)"
+            strokeWidth={3}
+            pointerEvents="none"
+          />
+        )}
+        <g
+          fontSize={narrow ? 20 : 14}
+          fontWeight={600}
+          fill="currentColor"
+          stroke="var(--bg)"
+          strokeWidth={3}
+          paintOrder="stroke"
+          textAnchor="middle"
+          dominantBaseline="middle"
+          pointerEvents="none"
+          className={`transition-opacity duration-200 ${animating ? "opacity-0" : ""}`}
+        >
+          {heatmap.map(
+            ({ key, centre: [x, y], label }) =>
+              Number.isFinite(x) && (
+                <text key={key} x={x} y={y}>
+                  {label}
+                </text>
+              ),
+          )}
+        </g>
+      </svg>
+      {(coarse || touched) && (
+        <button
+          type="button"
+          // Hidden, not removed, when the map ignores the pointer, so the
+          // map keeps its size when the round ends
+          className={`btn btn-active w-full max-w-xs py-2 disabled:opacity-40 ${onCellClick ? "" : "invisible"}`}
+          disabled={!selectedCell}
+          onClick={() => selectedCell && confirm(selectedCell)}
+        >
+          {selectedCell ? "Confirm" : "Tap a cell"}
+        </button>
+      )}
+    </>
   );
 }
