@@ -39,19 +39,15 @@ export function DailyRound({
   return (
     <>
       <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
-        <span className="opacity-60">
+        <span className="text-ink-soft">
           {title} · Round {index + 1}/{dailyRounds.length}
         </span>
-        <span className="text-xl font-semibold">{name}</span>
-        <span className="opacity-60">
+        <span className="font-display text-3xl">{name}</span>
+        <span className="text-ink-soft">
           {over ? pointsLabel(pointsFor(round)) : roundStatus(round)}
         </span>
         {over && (
-          <button
-            type="button"
-            className="rounded border px-2 py-0.5"
-            onClick={onNext}
-          >
+          <button type="button" className="btn" onClick={onNext}>
             {last ? "See results" : "Next round"}
           </button>
         )}
@@ -62,6 +58,8 @@ export function DailyRound({
         displayCountry={displayCountry}
         countryCells={countryCells}
         world={data.world}
+        countries={data.countries}
+        displayCountries={data.displayCountries}
         projectionName={level.projectionName}
         marked={misses(round)}
         revealed={over}

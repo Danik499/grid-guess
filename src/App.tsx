@@ -25,7 +25,7 @@ function App() {
     return <div className="p-4">Could not load map data: {error}</div>;
   }
   if (!data) {
-    return <div className="p-4 opacity-60">Loading map…</div>;
+    return <div className="p-4 text-ink-soft">Loading map…</div>;
   }
   return (
     <div className="flex h-dvh flex-col items-center gap-2 p-2 sm:p-4">
@@ -34,7 +34,7 @@ function App() {
           <button
             key={m}
             type="button"
-            className={`rounded border px-3 py-0.5 ${m === mode ? "font-semibold" : "opacity-60"}`}
+            className={`btn ${m === mode ? "btn-active" : ""}`}
             onClick={() => setMode(m)}
           >
             {m === "daily" ? "Daily" : "Random"}

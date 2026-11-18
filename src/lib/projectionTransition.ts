@@ -8,6 +8,7 @@ import {
   type GeoRawProjection,
 } from "d3";
 import type { Extent } from "./regions";
+import { transitionStarted } from "./transitionPerf";
 
 /** Everything that places a map on screen, in a form that can be blended. */
 export interface View {
@@ -100,9 +101,11 @@ export function useViewTransition(
   useEffect(() => {
     if (target === settled) return;
     const interpolate = interpolateView(shown.current, target.view);
+    const transitionEnded = transitionStarted();
     const t = timer((elapsed) => {
       if (elapsed >= duration) {
         t.stop();
+        transitionEnded(true);
         shown.current = target.view;
         setFrame(null);
         setSettled(target);
@@ -112,7 +115,10 @@ export function useViewTransition(
       shown.current = view;
       setFrame(view);
     });
-    return () => t.stop();
+    return () => {
+      t.stop();
+      transitionEnded(false);
+    };
   }, [target, settled, duration]);
 
   const framed = useMemo(

@@ -1,8 +1,8 @@
 import { cellKey, type CountryCells } from "../lib/countryArea";
-import type { RoundProgress } from "../lib/daily";
-import { formatPercent } from "../lib/format";
+import { TRIES_PER_ROUND, type RoundProgress } from "../lib/daily";
+import { formatCell, formatPercent } from "../lib/format";
 
-/** What each try told the player. */
+/** The ship's log: what each try told the player, with a slot per try left. */
 export function TryList({
   name,
   round,
@@ -14,25 +14,55 @@ export function TryList({
 }) {
   const best = countryCells.cells[0];
   return (
-    <ol className="h-16 w-full max-w-xl overflow-y-auto px-1 text-center text-sm">
-      {round.tries.length === 0 && (
-        <li className="opacity-60">
-          Click the cell that holds the biggest part of {name}.
-        </li>
-      )}
-      {round.tries.map((cell, i) => {
-        const share = countryCells.byKey.get(cellKey(cell));
-        return (
-          <li key={cellKey(cell)}>
-            {i + 1}.{" "}
-            {!share
-              ? `No part of ${name}`
-              : share.rank === 1
-                ? `Found it: ${formatPercent(share.share)} of ${name}`
-                : `Rank ${share.rank} of ${countryCells.cells.length} · ${formatPercent(share.share / best.share)} of the best cell`}
-          </li>
-        );
-      })}
-    </ol>
+    <div className="w-full max-w-xl px-1">
+      <div className="font-caps text-ink-soft text-center text-sm tracking-widest">
+        Ship’s log
+      </div>
+      <ol className="border-rule border-y">
+        {Array.from({ length: TRIES_PER_ROUND }, (_, i) => {
+          const cell = round.tries[i];
+          if (!cell) {
+            return (
+              <li
+                key={i}
+                className="border-rule text-ink-soft flex h-8 items-center gap-3 border-b border-dashed px-1 last:border-b-0"
+              >
+                <span className="border-rule size-6 shrink-0 rounded-full border border-dashed" />
+                <span className="italic">
+                  {i === 0 &&
+                    `Click the cell that holds the biggest part of ${name}.`}
+                </span>
+              </li>
+            );
+          }
+          const share = countryCells.byKey.get(cellKey(cell));
+          const found = share?.rank === 1;
+          return (
+            <li
+              key={cellKey(cell)}
+              className="border-rule flex h-8 items-center gap-3 border-b border-dashed px-1 last:border-b-0"
+            >
+              <span
+                className={`flex size-6 shrink-0 items-center justify-center rounded-full text-sm text-paper [font-variant-numeric:lining-nums] ${found ? "bg-correct" : "bg-wrong"}`}
+              >
+                {i + 1}
+              </span>
+              <span className="min-w-0 flex-1 truncate text-left">
+                {formatCell(cell)}
+              </span>
+              <span
+                className={`shrink-0 text-right ${found ? "text-correct font-semibold" : ""}`}
+              >
+                {!share
+                  ? "No part of it"
+                  : found
+                    ? `Found it · ${formatPercent(share.share)} of ${name}`
+                    : `Rank ${share.rank}/${countryCells.cells.length} · ${formatPercent(share.share / best.share)} of best`}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
   );
 }

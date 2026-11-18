@@ -82,11 +82,11 @@ export function RandomGame(data: MapData) {
         </select>
       </div>
       <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
-        <span className="text-xl font-semibold">{country.properties.name}</span>
-        <span className="opacity-60">{roundStatus(round)}</span>
+        <span className="font-display text-3xl">{country.properties.name}</span>
+        <span className="text-ink-soft">{roundStatus(round)}</span>
         <button
           type="button"
-          className="rounded border px-2 py-0.5"
+          className="btn"
           onClick={() => {
             setSeed(randomSeed());
             startLevel();
@@ -105,6 +105,8 @@ export function RandomGame(data: MapData) {
         displayCountry={displayCountry}
         countryCells={countryCells}
         world={data.world}
+        countries={data.countries}
+        displayCountries={data.displayCountries}
         projectionName={projectionName}
         marked={misses(round)}
         revealed={over}
